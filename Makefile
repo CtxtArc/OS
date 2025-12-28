@@ -32,19 +32,21 @@ disk.img:
 disk: disk.img
 	@echo "Injecting files into disk.img..."
 	# mcopy -o overwrites if it exists
-	mcopy -i disk.img test.txt ::/TEST.TXT
 	# Create a 2KB dummy file on your host
-	python3 -c "print('A' * 512 + 'B' * 512)" > LARGE.TXT
-	mcopy -i disk.img LARGE.TXT ::/LARGE.TXT
-	mcopy -i disk.img program.txt ::/PROGRAM.TXT
-	mcopy -i disk.img print.txt ::/PRINT.TXT
-	mcopy -i disk.img label.txt ::/LABEL.TXT
-	mcopy -i disk.img SPIN2.txt ::/SPIN2.TXT
-	mcopy -i disk.img vars.txt ::/VARS.TXT
-	mcopy -i disk.img cond.txt ::/COND.TXT
+	python3 -c "print('A' * 512 + 'B' * 512)" > tests/large.txt
+	-mmd -i disk.img ::/TESTS
+	for file in tests/*.txt; do \
+		filename=$$(basename $$file | tr 'a-z' 'A-Z'); \
+		mcopy -o -i disk.img $$file ::/TESTS/$$filename; \
+	done
+
+
 lsdisk:
 	@echo "FAT16 Root Directory Listing:"
 	mdir -i disk.img ::/
+lstest:
+	@echo "FAT16 TESTS/ Directory Listing:"
+	mdir -i disk.img ::/TESTS
 
 clean_disk:
 	rm -f disk.img
