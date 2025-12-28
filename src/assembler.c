@@ -24,11 +24,29 @@ uint32_t get_var_offset(const char* name) {
     rt_var_count++;
     return new_offset;
 }
+
 void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) {
+    char clean_line[128];
+    kstrncpy(clean_line, line, 128);
+
+    // Find first # and terminate string there
+    for (int i = 0; i < 128 && clean_line[i] != '\0'; i++) {
+        if (clean_line[i] == '#') {
+            clean_line[i] = '\0';
+            break;
+        }
+    }
     char cmd[32];
 char arg_str[32]; // Fixed: Declared here for general use
-    const char* ptr = get_token(line, cmd);
-    if (!ptr) return;
+    // Use clean_line from here on instead of line
+    const char* ptr = get_token(clean_line, cmd);
+    if (!ptr || cmd[0] == '\0') return;
+
+
+
+
+
+
 
     // --- LABEL: No code, just recording address ---
     if (kstrcmp(cmd, "LABEL") == 0) {
@@ -99,41 +117,59 @@ char arg_str[32]; // Fixed: Declared here for general use
         }
     }
 
-    // --- PRINT: Variable length string + Load Logic (6 bytes per load) ---
-   else if (kstrcmp(cmd, "PRINT") == 0) {
+    else if (kstrcmp(cmd, "PRINT") == 0) {
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') p++; // Skip whitespace
+    p += 5; // Skip "PRINT"
+    while (*p == ' ' || *p == '\t') p++; // Skip whitespace after command
+
+    if (*p == '\"') {
+        // --- EXISTING STRING LOGIC ---
         char str_val[128];
-        const char* p = line;
-        while (*p != '\"' && *p != '\0') p++;
+        p++; // skip quote
         uint32_t s_len = 0;
-        if (*p == '\"') {
-            p++;
-            while (*p != '\"' && *p != '\0' && s_len < 127) str_val[s_len++] = *p++;
-            str_val[s_len++] = '\0';
-            if (*p == '\"') p++;
-        }
+        while (*p != '\"' && *p != '\0' && s_len < 127) str_val[s_len++] = *p++;
+        str_val[s_len++] = '\0';
+        if (*p == '\"') p++;
 
         if (pass == 2) {
             char t1[32], t2[32], t3[32];
             p = get_token(p, t1); p = get_token(p, t2); p = get_token(p, t3);
 
-            // Skip over string data
-            out_buf[(*pos)++] = 0xEB; 
-            out_buf[(*pos)++] = (uint8_t)s_len;
-            
+            out_buf[(*pos)++] = 0xEB; out_buf[(*pos)++] = (uint8_t)s_len;
             uint32_t str_offset = *pos;
             for(uint32_t j = 0; j < s_len; j++) out_buf[(*pos)++] = (uint8_t)str_val[j];
 
-            emit_load(0xB8, "7", out_buf, pos);        // EAX = 7
-            emit_mov(0xBB, str_offset, out_buf, pos);  // EBX = raw offset (use emit_mov!)
-            emit_load(0xB9, t1, out_buf, pos);         // ECX = X
-            emit_load(0xBA, t2, out_buf, pos);         // EDX = Y
-            emit_load(0xBF, t3, out_buf, pos);         // EDI = Color
-            
+            emit_load(0xB8, "7", out_buf, pos);        // Syscall 7 (Print String)
+            emit_mov(0xBB, str_offset, out_buf, pos);
+            emit_load(0xB9, t1, out_buf, pos);         // X
+            emit_load(0xBA, t2, out_buf, pos);         // Y
+            emit_load(0xBF, t3, out_buf, pos);         // Color
             out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
         } else {
-            *pos += (2 + s_len + 30 + 2); // 5 MOVs * 6 bytes = 30
+            *pos += (2 + s_len + 30 + 2);
+        }
+    } 
+    else {
+        // --- NEW VARIABLE/NUMBER LOGIC ---
+        char var_name[32], t1[32], t2[32], t3[32];
+        p = get_token(p, var_name);
+        p = get_token(p, t1); // x
+        p = get_token(p, t2); // y
+        p = get_token(p, t3); // color
+
+        if (pass == 2) {
+            emit_load(0xB8, "9", out_buf, pos);        // Syscall 9 (Print Number)
+            emit_load(0xBB, var_name, out_buf, pos);   // The Value
+            emit_load(0xB9, t1, out_buf, pos);         // X
+            emit_load(0xBA, t2, out_buf, pos);         // Y
+            emit_load(0xBF, t3, out_buf, pos);         // Color
+            out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
+        } else {
+            *pos += 32; // 5 loads (30) + INT (2)
         }
     }
+}
 
     else if (kstrcmp(cmd, "SLEEP") == 0) {
         if (pass == 2) {
@@ -175,4 +211,52 @@ char arg_str[32]; // Fixed: Declared here for general use
             *pos += 8;
         }
     }
+else if (kstrcmp(cmd, "CMP") == 0) {
+    char var_name[32], val_str[32];
+    ptr = get_token(ptr, var_name);
+    ptr = get_token(ptr, val_str);
+    
+    if (pass == 2) {
+        // Load the variable into EAX to compare it
+        emit_load(0xB8, var_name, out_buf, pos);
+        
+        // CMP EAX, immediate_value (Opcode 0x3D)
+        uint32_t val = (val_str[0] == '0' && val_str[1] == 'x') ? katoh(val_str) : katoi(val_str);
+        out_buf[(*pos)++] = 0x3D; 
+        kmemcpy(&out_buf[*pos], &val, 4);
+        *pos += 4;
+    } else {
+        *pos += 11; // 6 (emit_load) + 5 (cmp)
+    }
+}
+else if (kstrcmp(cmd, "JE") == 0 || kstrcmp(cmd, "JL") == 0 || kstrcmp(cmd, "JG") == 0) {
+    char label_name[32];
+    get_token(ptr, label_name);
+
+    // Select opcode based on command
+    uint8_t condition_byte = 0;
+    if (cmd[1] == 'E')      condition_byte = 0x84; // JE (Jump Equal)
+    else if (cmd[1] == 'L') condition_byte = 0x8C; // JL (Jump Less)
+    else if (cmd[1] == 'G') condition_byte = 0x8F; // JG (Jump Greater)
+
+    if (pass == 2) {
+        uint32_t target = 0xFFFFFFFF;
+        for(int i = 0; i < label_count; i++) {
+            if(kstrcmp(label_table[i].name, label_name) == 0) {
+                target = label_table[i].address;
+                break;
+            }
+        }
+        
+        out_buf[(*pos)++] = 0x0F;            // Prefix
+        out_buf[(*pos)++] = condition_byte;   // Opcode
+        
+        // Offset = Target - (Current_Pos + 4 bytes for the offset itself)
+        int32_t offset = (int32_t)target - (int32_t)(*pos + 4);
+        kmemcpy(&out_buf[*pos], &offset, 4);
+        *pos += 4;
+    } else {
+        *pos += 6; // 2 bytes for opcode + 4 for offset
+    }
+}
 }

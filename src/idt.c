@@ -4,6 +4,8 @@
 #include "task.h"
 #include "vesa.h"
 #include "kheap.h"
+#include "assembler.h"
+
 uint32_t timer_frequency = 0; // Global variable to store the frequency
 extern struct task task_list[];
 extern int current_task_idx;
@@ -401,6 +403,17 @@ else if (regs->eax == 7) { // Syscall 7: PRINT_STR
     if (y + 8 > task_list[id].last_y) task_list[id].last_y = y + 8;
 
     task_list[id].has_drawn = 1;
+}
+
+else if (regs->eax == 9) { // PRINT_NUMBER
+    uint32_t val = regs->ebx;
+    int x = regs->ecx;
+    int y = regs->edx;
+    uint32_t color = regs->edi;
+
+    char buf[12];
+    itoa(val, buf, 10); // Your kernel's integer-to-ascii function
+    VESA_print_at(buf, x, y, color);
 }
 
 }

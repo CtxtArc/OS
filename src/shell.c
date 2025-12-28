@@ -402,47 +402,52 @@ void shell_compile(const char* arg) {
     char* source_buf = (char*)fat_load_file(file);
     uint8_t* binary_buf = (uint8_t*)kmalloc(8192);
     
-    // --- IMPORTANT: RESET STATE ---
     label_count = 0;
+    rt_var_count = 0; // Ensure you reset runtime vars too!
 
-    // --- PASS 1: SCAN FOR LABELS ---
-    uint32_t p1_pos = 0;
-    uint32_t current_offset = 0;
-    while (current_offset < file->size) {
-        char temp_line[128]; uint32_t i = 0;
-        while (current_offset < file->size && source_buf[current_offset] != '\n' && i < 127) {
-            temp_line[i] = source_buf[current_offset];
-            i++; current_offset++;
+    // We do two passes using the same logic
+    for (int pass = 1; pass <= 2; pass++) {
+        uint32_t current_pos = 0;
+        uint32_t binary_pos = 0;
+        char* line_ptr = source_buf;
+
+        while (current_pos < file->size) {
+            char temp_line[128];
+            uint32_t i = 0;
+            
+            while (current_pos < file->size && source_buf[current_pos] != '\n' && i < 127) {
+                temp_line[i++] = source_buf[current_pos++];
+            }
+            temp_line[i] = '\0';
+            current_pos++; // Skip newline
+
+            // --- COMMENT HANDLING (Full Line) ---
+            char* walk = temp_line;
+            while (*walk == ' ' || *walk == '\t') walk++; // Skip leading whitespace
+            if (*walk == '#' || *walk == '\0') continue;  // Skip empty or comment lines
+
+            if (pass == 1) {
+                assemble_line(temp_line, NULL, &binary_pos, 1);
+            } else {
+                assemble_line(temp_line, binary_buf, &binary_pos, 2);
+            }
         }
-        temp_line[i] = '\0';
-        current_offset++; // Skip the newline
-        assemble_line(temp_line, NULL, &p1_pos, 1);
-    }
+        
+        if (pass == 2) {
+            // After Pass 2, save the binary size
+            uint32_t binary_size = binary_pos;
+            
+            // Filename generation logic...
+            char out_name[16];
+            int k;
+            for (k = 0; k < 11 && arg[k] != '.' && arg[k] != '\0'; k++) out_name[k] = arg[k];
+            out_name[k++] = '.'; out_name[k++] = 'B'; out_name[k++] = 'I'; out_name[k++] = 'N'; out_name[k] = '\0';
 
-    // --- PASS 2: GENERATE MACHINE CODE ---
-    uint32_t binary_size = 0;
-    current_offset = 0;
-    while (current_offset < file->size) {
-        char temp_line[128]; uint32_t i = 0;
-        while (current_offset < file->size && source_buf[current_offset] != '\n' && i < 127) {
-            temp_line[i] = source_buf[current_offset];
-            i++; current_offset++;
+            fat_touch(out_name);
+            fat_write_file_raw(out_name, binary_buf, binary_size);
+            kprintf_unsync("Compiled %s to %s (%d bytes)\n", arg, out_name, binary_size);
         }
-        temp_line[i] = '\0';
-        current_offset++; // Skip the newline
-        assemble_line(temp_line, binary_buf, &binary_size, 2);
     }
-
-    // Save Output
-    char out_name[16];
-    int k;
-    for (k = 0; k < 11 && arg[k] != '.' && arg[k] != '\0'; k++) out_name[k] = arg[k];
-    out_name[k++] = '.'; out_name[k++] = 'B'; out_name[k++] = 'I'; out_name[k++] = 'N'; out_name[k] = '\0';
-
-    fat_touch(out_name);
-    fat_write_file_raw(out_name, binary_buf, binary_size);
-
-    kprintf_unsync("Compiled %s to %s (%d bytes)\n", arg, out_name, binary_size);
 
     kfree(source_buf);
     kfree(binary_buf);

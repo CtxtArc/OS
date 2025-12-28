@@ -41,6 +41,7 @@ disk: disk.img
 	mcopy -i disk.img label.txt ::/LABEL.TXT
 	mcopy -i disk.img SPIN2.txt ::/SPIN2.TXT
 	mcopy -i disk.img vars.txt ::/VARS.TXT
+	mcopy -i disk.img cond.txt ::/COND.TXT
 lsdisk:
 	@echo "FAT16 Root Directory Listing:"
 	mdir -i disk.img ::/
