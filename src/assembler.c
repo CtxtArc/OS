@@ -2,19 +2,35 @@
 #include "lib.h"
 #include "idt.h"
 #include "kheap.h"
-
+#include "assembler.h"
 
 
 Label label_table[64];
 int label_count = 0;
 
+RuntimeVar rt_vars[64];
+int rt_var_count = 0;
+
+
+// Helper to find or create a variable's memory offset
+uint32_t get_var_offset(const char* name) {
+    for(int i = 0; i < rt_var_count; i++) {
+        if(kstrcmp(rt_vars[i].name, name) == 0) return rt_vars[i].offset;
+    }
+    // Create new variable at the end of the 4KB buffer (e.g., starting at 3000)
+    uint32_t new_offset = 3000 + (rt_var_count * 4);
+    kstrncpy(rt_vars[rt_var_count].name, name, 32);
+    rt_vars[rt_var_count].offset = new_offset;
+    rt_var_count++;
+    return new_offset;
+}
 void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) {
     char cmd[32];
-    char arg_str[32];
+char arg_str[32]; // Fixed: Declared here for general use
     const char* ptr = get_token(line, cmd);
     if (!ptr) return;
 
-    // --- LABEL: No code generated, just address recording ---
+    // --- LABEL: No code, just recording address ---
     if (kstrcmp(cmd, "LABEL") == 0) {
         if (pass == 1) {
             char name[32];
@@ -28,7 +44,7 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         return; 
     }
 
-    // --- GOTO: 5 Bytes (0xE9 + 4-byte relative offset) ---
+    // --- GOTO: 5 bytes ---
     else if (kstrcmp(cmd, "GOTO") == 0) {
         if (pass == 2) {
             char name[32];
@@ -47,8 +63,44 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         *pos += 5;
     }
 
-    // --- PRINT: 2 (JMP) + string_len + 25 (5 MOVs) + 2 (INT) ---
-    else if (kstrcmp(cmd, "PRINT") == 0) {
+    // --- SET: Generates "MOV [addr], imm32" (10 bytes) ---
+    else if (kstrcmp(cmd, "SET") == 0) {
+        if (pass == 2) {
+            char var_name[32], val_str[32];
+            ptr = get_token(ptr, var_name);
+            ptr = get_token(ptr, val_str);
+            uint32_t offset = get_var_offset(var_name);
+            uint32_t val = (val_str[0] == '0' && val_str[1] == 'x') ? katoh(val_str) : katoi(val_str);
+
+            out_buf[(*pos)++] = 0xC7; // MOV DWORD PTR [mem]
+            out_buf[(*pos)++] = 0x05; // ModR/M for disp32
+            kmemcpy(&out_buf[*pos], &offset, 4); *pos += 4;
+            kmemcpy(&out_buf[*pos], &val, 4);    *pos += 4;
+        } else {
+            *pos += 10;
+        }
+    }
+
+    // --- ADD: Generates "ADD [addr], imm32" (10 bytes) ---
+    else if (kstrcmp(cmd, "ADD") == 0) {
+        if (pass == 2) {
+            char var_name[32], val_str[32];
+            ptr = get_token(ptr, var_name);
+            ptr = get_token(ptr, val_str);
+            uint32_t offset = get_var_offset(var_name);
+            uint32_t amount = katoi(val_str);
+
+            out_buf[(*pos)++] = 0x81; // ADD DWORD PTR [mem]
+            out_buf[(*pos)++] = 0x05; 
+            kmemcpy(&out_buf[*pos], &offset, 4); *pos += 4;
+            kmemcpy(&out_buf[*pos], &amount, 4); *pos += 4;
+        } else {
+            *pos += 10;
+        }
+    }
+
+    // --- PRINT: Variable length string + Load Logic (6 bytes per load) ---
+   else if (kstrcmp(cmd, "PRINT") == 0) {
         char str_val[128];
         const char* p = line;
         while (*p != '\"' && *p != '\0') p++;
@@ -56,74 +108,71 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         if (*p == '\"') {
             p++;
             while (*p != '\"' && *p != '\0' && s_len < 127) str_val[s_len++] = *p++;
-            str_val[s_len++] = '\0'; // Include null
+            str_val[s_len++] = '\0';
             if (*p == '\"') p++;
         }
 
         if (pass == 2) {
-            char tmp[32]; uint32_t x, y, col;
-            p = get_token(p, tmp); x = katoi(tmp);
-            p = get_token(p, tmp); y = katoi(tmp);
-            p = get_token(p, tmp); col = (tmp[0] == '0' && tmp[1] == 'x') ? katoh(tmp) : katoi(tmp);
+            char t1[32], t2[32], t3[32];
+            p = get_token(p, t1); p = get_token(p, t2); p = get_token(p, t3);
 
-            out_buf[(*pos)++] = 0xEB; // JMP short
+            // Skip over string data
+            out_buf[(*pos)++] = 0xEB; 
             out_buf[(*pos)++] = (uint8_t)s_len;
+            
             uint32_t str_offset = *pos;
             for(uint32_t j = 0; j < s_len; j++) out_buf[(*pos)++] = (uint8_t)str_val[j];
 
-            emit_mov(0xB8, 7, out_buf, pos);          // EAX
-            emit_mov(0xBB, str_offset, out_buf, pos); // EBX
-            emit_mov(0xB9, x, out_buf, pos);          // ECX
-            emit_mov(0xBA, y, out_buf, pos);          // EDX
-            emit_mov(0xBF, col, out_buf, pos);         // EDI
+            emit_load(0xB8, "7", out_buf, pos);        // EAX = 7
+            emit_mov(0xBB, str_offset, out_buf, pos);  // EBX = raw offset (use emit_mov!)
+            emit_load(0xB9, t1, out_buf, pos);         // ECX = X
+            emit_load(0xBA, t2, out_buf, pos);         // EDX = Y
+            emit_load(0xBF, t3, out_buf, pos);         // EDI = Color
+            
             out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
         } else {
-            *pos += (2 + s_len + 25 + 2);
+            *pos += (2 + s_len + 30 + 2); // 5 MOVs * 6 bytes = 30
         }
     }
 
-    // --- RECT: 32 Bytes (6 MOVs + INT) ---
-    else if (kstrcmp(cmd, "RECT") == 0) {
-        if (pass == 2) {
-            uint32_t x, y, w, h, col;
-            ptr = get_token(ptr, arg_str); x = katoi(arg_str);
-            ptr = get_token(ptr, arg_str); y = katoi(arg_str);
-            ptr = get_token(ptr, arg_str); w = katoi(arg_str);
-            ptr = get_token(ptr, arg_str); h = katoi(arg_str);
-            ptr = get_token(ptr, arg_str); col = (arg_str[0] == '0' && arg_str[1] == 'x') ? katoh(arg_str) : katoi(arg_str);
-
-            emit_mov(0xB8, 6, out_buf, pos);
-            emit_mov(0xBB, x, out_buf, pos);
-            emit_mov(0xB9, y, out_buf, pos);
-            emit_mov(0xBA, w, out_buf, pos);
-            emit_mov(0xBE, h, out_buf, pos);
-            emit_mov(0xBF, col, out_buf, pos);
-            out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
-        } else {
-            *pos += 32;
-        }
-    }
-
-    // --- SLEEP: 12 Bytes (2 MOVs + INT) ---
     else if (kstrcmp(cmd, "SLEEP") == 0) {
         if (pass == 2) {
-            ptr = get_token(ptr, arg_str); uint32_t ms = katoi(arg_str);
-            emit_mov(0xB8, 3, out_buf, pos);
-            emit_mov(0xBB, ms, out_buf, pos);
+            ptr = get_token(ptr, arg_str); // Fixed: arg_str is now declared
+            emit_load(0xB8, "3", out_buf, pos);
+            emit_load(0xBB, arg_str, out_buf, pos);
             out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
         } else {
-            *pos += 12;
+            *pos += 14;
+        }
+    }    // --- RECT: 6 Loads (36) + INT (2) = 38 bytes ---
+    else if (kstrcmp(cmd, "RECT") == 0) {
+        if (pass == 2) {
+            char t1[32], t2[32], t3[32], t4[32], t5[32];
+            ptr = get_token(ptr, t1); ptr = get_token(ptr, t2);
+            ptr = get_token(ptr, t3); ptr = get_token(ptr, t4);
+            ptr = get_token(ptr, t5);
+
+            emit_load(0xB8, "6", out_buf, pos); // Syscall 6
+            emit_load(0xBB, t1, out_buf, pos);  // X
+            emit_load(0xB9, t2, out_buf, pos);  // Y
+            emit_load(0xBA, t3, out_buf, pos);  // W
+            emit_load(0xBE, t4, out_buf, pos);  // H
+            emit_load(0xBF, t5, out_buf, pos);  // Color
+            out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
+        } else {
+            *pos += 38;
         }
     }
 
-    // --- CLEAR/EXIT: 7 Bytes (1 MOV + INT) ---
+    
+
     else if (kstrcmp(cmd, "CLEAR") == 0 || kstrcmp(cmd, "EXIT") == 0) {
-        uint32_t id = (kstrcmp(cmd, "CLEAR") == 0) ? 5 : 4;
         if (pass == 2) {
-            emit_mov(0xB8, id, out_buf, pos);
+            const char* id = (kstrcmp(cmd, "CLEAR") == 0) ? "5" : "4";
+            emit_load(0xB8, id, out_buf, pos);
             out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
         } else {
-            *pos += 7;
+            *pos += 8;
         }
     }
 }

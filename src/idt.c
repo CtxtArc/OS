@@ -227,12 +227,37 @@ void keyboard_handler(struct registers *regs) {
     outb(0x20, 0x20);
 }
 
-
-// Helper to emit a MOV instruction for a specific register
 void emit_mov(uint8_t reg_code, uint32_t val, uint8_t* out_buf, uint32_t* pos) {
     out_buf[(*pos)++] = reg_code;
     kmemcpy(&out_buf[*pos], &val, 4);
     *pos += 4;
+}
+void emit_load(uint8_t reg_opcode, const char* arg, uint8_t* out_buf, uint32_t* pos) {
+    // If it's a number (literal)
+    if ((arg[0] >= '0' && arg[0] <= '9') || arg[0] == '-') {
+        uint32_t val = (arg[0] == '0' && arg[1] == 'x') ? katoh(arg) : katoi(arg);
+        out_buf[(*pos)++] = reg_opcode; // e.g., 0xB8 for EAX, 0xBB for EBX
+        kmemcpy(&out_buf[*pos], &val, 4);
+        *pos += 4;
+    } 
+    // If it's a variable (memory address)
+    else {
+        uint32_t offset = get_var_offset(arg);
+        // We use the Opcode 0x8B (MOV reg, [mem])
+        // This is slightly more complex x86 encoding:
+        out_buf[(*pos)++] = 0x8B;
+        
+        // This "ModR/M" byte selects which register to load into
+        if (reg_opcode == 0xB8) out_buf[(*pos)++] = 0x05; // EAX
+        else if (reg_opcode == 0xBB) out_buf[(*pos)++] = 0x1D; // EBX
+        else if (reg_opcode == 0xB9) out_buf[(*pos)++] = 0x0D; // ECX
+        else if (reg_opcode == 0xBA) out_buf[(*pos)++] = 0x15; // EDX
+        else if (reg_opcode == 0xBE) out_buf[(*pos)++] = 0x35; // ESI
+        else if (reg_opcode == 0xBF) out_buf[(*pos)++] = 0x3D; // EDI
+        
+        kmemcpy(&out_buf[*pos], &offset, 4);
+        *pos += 4;
+    }
 }
 
 
@@ -377,4 +402,6 @@ else if (regs->eax == 7) { // Syscall 7: PRINT_STR
 
     task_list[id].has_drawn = 1;
 }
+
 }
+
