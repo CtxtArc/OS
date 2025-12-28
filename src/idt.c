@@ -346,6 +346,28 @@ else if (regs->eax == 6) { // DRAW_RECT
     
     VESA_draw_rect(x, y, w, h, color);
 }
+else if (regs->eax == 7) { // Syscall 7: PRINT_STR
+    // EBX contains the relative offset. Add code_ptr to get the actual address.
+    char* str = (char*)(regs->ebx + task_list[current_task_idx].code_ptr);
+    int x = regs->ecx;
+    int y = regs->edx;
+    uint32_t color = regs->edi;
+    int id = current_task_idx;
+
+    int i = 0;
+    while (str[i] != '\0') {
+        VESA_draw_char(str[i], x + (i * 8), y, color);
+        i++;
+    }
+
+    // Update Bounding Box for auto-cleanup (String width is i * 8)
+    if (x < task_list[id].first_x) task_list[id].first_x = x;
+    if (y < task_list[id].first_y) task_list[id].first_y = y;
+    if (x + (i * 8) > task_list[id].last_x) task_list[id].last_x = x + (i * 8);
+    if (y + 8 > task_list[id].last_y) task_list[id].last_y = y + 8;
+
+    task_list[id].has_drawn = 1;
+}
 }
 
 // Helper to emit a MOV instruction for a specific register
@@ -435,6 +457,48 @@ else if (kstrcmp(cmd, "CLEAR") == 0) {
     // We only need to set EAX to 5 and trigger the interrupt
     emit_mov(0xB8, 5, out_buf, pos); // MOV EAX, 5
     out_buf[(*pos)++] = 0xCD;        // INT 0x80
+    out_buf[(*pos)++] = 0x80;
+}
+else if (kstrcmp(cmd, "PRINT") == 0) {
+    char str_val[128];
+    char tmp[32];
+    uint32_t x, y, color;
+
+    // 1. Extract the string between quotes
+    const char* p = line;
+    while (*p != '\"' && *p != '\0') p++;
+    int s_idx = 0;
+    if (*p == '\"') {
+        p++;
+        while (*p != '\"' && *p != '\0' && s_idx < 127) str_val[s_idx++] = *p++;
+        str_val[s_idx++] = '\0'; // Include null terminator
+        if (*p == '\"') p++;
+    }
+
+    // 2. Extract X, Y, and Color
+    p = get_token(p, tmp); x = katoi(tmp);
+    p = get_token(p, tmp); y = katoi(tmp);
+    p = get_token(p, tmp); 
+    color = (tmp[0] == '0' && tmp[1] == 'x') ? katoh(tmp) : katoi(tmp);
+
+    // 3. Emit JMP over the string data (2 bytes: EB + length)
+    out_buf[(*pos)++] = 0xEB; 
+    out_buf[(*pos)++] = (uint8_t)s_idx;
+
+    // 4. Write the String Data into the binary
+    uint32_t str_offset = *pos;
+    for (int j = 0; j < s_idx; j++) {
+        out_buf[(*pos)++] = (uint8_t)str_val[j];
+    }
+
+    // 5. Emit Syscall Setup
+    emit_mov(0xB8, 7, out_buf, pos);          // EAX = 7
+    emit_mov(0xBB, str_offset, out_buf, pos); // EBX = Offset to string
+    emit_mov(0xB9, x, out_buf, pos);          // ECX = X
+    emit_mov(0xBA, y, out_buf, pos);          // EDX = Y
+    emit_mov(0xBF, color, out_buf, pos);      // EDI = Color
+    
+    out_buf[(*pos)++] = 0xCD; // INT 0x80
     out_buf[(*pos)++] = 0x80;
 }
 }

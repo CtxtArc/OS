@@ -296,3 +296,20 @@ const char* get_token(const char* line, char* token_out) {
     *token_out = '\0';
     return line;
 }
+uint32_t katoh(const char* s) {
+    uint32_t res = 0;
+    // Skip "0x" prefix
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+
+    while (1) {
+        char c = *s++;
+        uint32_t val;
+        if (c >= '0' && c <= '9') val = c - '0';
+        else if (c >= 'a' && c <= 'f') val = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') val = c - 'A' + 10;
+        else break; // End of string or invalid hex char
+
+        res = (res << 4) | (val & 0xF);
+    }
+    return res;
+}
