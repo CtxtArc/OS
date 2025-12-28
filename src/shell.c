@@ -399,57 +399,51 @@ void shell_compile(const char* arg) {
         return;
     }
 
-    // 1. Load the ASCII text from disk
     char* source_buf = (char*)fat_load_file(file);
+    uint8_t* binary_buf = (uint8_t*)kmalloc(8192);
     
-    // 2. Allocate a buffer for the ACTUAL MACHINE CODE (binary)
-    uint8_t* binary_buf = (uint8_t*)kmalloc(4096);
-    uint32_t binary_size = 0; // This tracks ACTUAL BYTES generated
+    // --- IMPORTANT: RESET STATE ---
+    label_count = 0;
 
-    char* line = source_buf;
-    uint32_t current_pos = 0;
-
-    while (current_pos < file->size) {
-        char temp_line[128];
-        uint32_t i = 0;
-        
-        // Extract one line from the source_buf
-        while (current_pos < file->size && line[i] != '\n' && i < 127) {
-            temp_line[i] = line[i];
-            i++;
+    // --- PASS 1: SCAN FOR LABELS ---
+    uint32_t p1_pos = 0;
+    uint32_t current_offset = 0;
+    while (current_offset < file->size) {
+        char temp_line[128]; uint32_t i = 0;
+        while (current_offset < file->size && source_buf[current_offset] != '\n' && i < 127) {
+            temp_line[i] = source_buf[current_offset];
+            i++; current_offset++;
         }
         temp_line[i] = '\0';
-        
-        // Move our source pointers forward
-        current_pos += (i + 1);
-        line += (i + 1);
-
-        // --- THE MAGIC STEP ---
-        // assemble_line must write hex bytes into binary_buf at offset 'binary_size'
-        assemble_line(temp_line, binary_buf, &binary_size);
+        current_offset++; // Skip the newline
+        assemble_line(temp_line, NULL, &p1_pos, 1);
     }
 
+    // --- PASS 2: GENERATE MACHINE CODE ---
+    uint32_t binary_size = 0;
+    current_offset = 0;
+    while (current_offset < file->size) {
+        char temp_line[128]; uint32_t i = 0;
+        while (current_offset < file->size && source_buf[current_offset] != '\n' && i < 127) {
+            temp_line[i] = source_buf[current_offset];
+            i++; current_offset++;
+        }
+        temp_line[i] = '\0';
+        current_offset++; // Skip the newline
+        assemble_line(temp_line, binary_buf, &binary_size, 2);
+    }
 
-    // 4. WRITE THE BINARY BUFFER, NOT THE SOURCE BUFFER
-    // 4. Generate output filename (e.g., TEST.TXT -> TEST.BIN)
+    // Save Output
     char out_name[16];
-    int i = 0;
-    for (i = 0; i < 11 && arg[i] != '.' && arg[i] != '\0'; i++) {
-        out_name[i] = arg[i];
-    }
-    out_name[i++] = '.';
-    out_name[i++] = 'B';
-    out_name[i++] = 'I';
-    out_name[i++] = 'N';
-    out_name[i] = '\0';
+    int k;
+    for (k = 0; k < 11 && arg[k] != '.' && arg[k] != '\0'; k++) out_name[k] = arg[k];
+    out_name[k++] = '.'; out_name[k++] = 'B'; out_name[k++] = 'I'; out_name[k++] = 'N'; out_name[k] = '\0';
 
-    // 5. Save the output
     fat_touch(out_name);
     fat_write_file_raw(out_name, binary_buf, binary_size);
 
-    kprintf_unsync("Compiled: %s (%d instructions/bytes)\n", out_name, binary_size);
+    kprintf_unsync("Compiled %s to %s (%d bytes)\n", arg, out_name, binary_size);
 
-    // 6. Final Cleanup
     kfree(source_buf);
     kfree(binary_buf);
 }
