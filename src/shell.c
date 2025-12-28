@@ -9,6 +9,7 @@
 #include "idt.h"
 #include "fat.h"
 #include "KED.h"
+#include "assembler.h"
 
 extern int vesa_updating;
 extern uint32_t system_ticks;

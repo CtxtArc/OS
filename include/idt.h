@@ -37,6 +37,5 @@ void timer_handler();
 void timer_init(uint32_t frequency);
 void keyboard_handler(struct registers *regs); 
 void syscall_handler(struct registers *regs);
-void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos);
 void emit_mov(uint8_t reg_code, uint32_t val, uint8_t* out_buf, uint32_t* pos);
 #endif // !IDT
