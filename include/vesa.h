@@ -60,6 +60,7 @@ void VESA_clear();
 void VESA_draw_rect(int x, int y, int w, int h, uint32_t color);
 void VESA_draw_char(char c, int x, int y, uint32_t color);
 void VESA_scroll();
+void VESA_draw_pixel(int x, int y, uint32_t color);
 
 void VESA_print_unsync(const char* str, uint32_t color);
 void VESA_flip();

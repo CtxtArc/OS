@@ -23,6 +23,14 @@ struct task {
     char kbd_buffer[TASK_KBD_BUF_SIZE];
     uint8_t kbd_head;
     uint8_t kbd_tail;
+    
+    // --- Window Manager Data ---
+    int has_window;         // 1 if it has a GUI window, 0 if it's a background task
+    uint32_t* window_buffer;// The private memory canvas
+    int win_x;              // Where the window sits on the real screen (X)
+    int win_y;              // Where the window sits on the real screen (Y)
+    int win_w;              // Window Width
+    int win_h;              // Window Height
 };
 
 void init_multitasking();
@@ -41,4 +49,8 @@ int task_get_total_ticks(int id);
 void task_timer();
 void task_game();
 void run_top();
+
+
+
+void compositor_task();
 #endif

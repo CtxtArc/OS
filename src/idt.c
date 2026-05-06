@@ -291,24 +291,53 @@ void emit_load(uint8_t reg_opcode, const char* arg, uint8_t* out_buf, uint32_t* 
 void syscall_handler(struct registers *regs) {
 // IMMEDIATELY re-enable interrupts so the keyboard and timer aren't starved!
     __asm__ volatile("sti");
-    if (regs->eax == 1) { // DRAW_CHAR
-    char c = (char)regs->ebx;
-    int x = regs->ecx;
-    int y = regs->edx;
-    int id = current_task_idx;
+    if (regs->eax == 1) { // Syscall 1: DRAW_CHAR
+        char c = (char)regs->ebx;
+        int x = regs->ecx;
+        int y = regs->edx;
+        int id = current_task_idx;
 
-    // Expand bounds to include this new character
-    if (x < task_list[id].first_x) task_list[id].first_x = x;
-    if (y < task_list[id].first_y) task_list[id].first_y = y;
-    
-    // Check the right and bottom edges (8 pixels for a standard font)
-    if (x + 8 > task_list[id].last_x) task_list[id].last_x = x + 8;
-    if (y + 8 > task_list[id].last_y) task_list[id].last_y = y + 8;
+        if (task_list[id].has_window) {
+            // --- WINDOW MANAGER MODE ---
+            extern uint8_t font8x8_basic[128][8]; // Import your font
+            uint8_t* glyph = font8x8_basic[(int)c];
+            uint32_t text_color = 0xFFFFFF; // White text
+            uint32_t bg_color = 0x222222;   // Dark grey background
 
-    task_list[id].has_drawn = 1;
-    VESA_draw_char(c, x, y, 0xFFFFFF); 
-}
-    else if (regs->eax == 2) { // Get Ticks
+            for (int row = 0; row < 8; row++) {
+                uint8_t data = glyph[row];
+                for (int col = 0; col < 8; col++) {
+                    int draw_x = x + col;
+                    int draw_y = y + row;
+
+                    // Clip to window bounds
+                    if (draw_x >= 0 && draw_x < task_list[id].win_w && 
+                        draw_y >= 0 && draw_y < task_list[id].win_h) {
+                        
+                        int pixel_index = (draw_y * task_list[id].win_w) + draw_x;
+                        
+                        if (data & (1 << (7 - col))) {
+                            task_list[id].window_buffer[pixel_index] = text_color;
+                        } else {
+                            // Optional: Comment this out if you want transparent text backgrounds
+                            task_list[id].window_buffer[pixel_index] = bg_color; 
+                        }
+                    }
+                }
+            }
+            task_list[id].has_drawn = 1;
+            
+        } else {
+            // --- LEGACY CLI MODE ---
+            if (x < task_list[id].first_x) task_list[id].first_x = x;
+            if (y < task_list[id].first_y) task_list[id].first_y = y;
+            if (x + 8 > task_list[id].last_x) task_list[id].last_x = x + 8;
+            if (y + 8 > task_list[id].last_y) task_list[id].last_y = y + 8;
+
+            task_list[id].has_drawn = 1;
+            VESA_draw_char(c, x, y, 0xFFFFFF); 
+        }
+    }    else if (regs->eax == 2) { // Get Ticks
         regs->eax = system_ticks; 
     }
 
@@ -352,6 +381,10 @@ else if (regs->eax == 3) { // Syscall 3: Sleep(ms)
             kfree(task_list[current_task_idx].code_ptr);
             task_list[current_task_idx].code_ptr = NULL; 
         }
+        if (task_list[current_task_idx].window_buffer != NULL) {
+            kfree(task_list[current_task_idx].window_buffer);
+            task_list[current_task_idx].window_buffer = NULL; 
+        }
 
         // DO NOT change current_task_idx manually!
         // Instead, force the CPU's Instruction Pointer to jump into the Idle loop.
@@ -361,28 +394,52 @@ else if (regs->eax == 3) { // Syscall 3: Sleep(ms)
     VESA_clear();
     // It's good practice to also reset the kernel's bounding box 
     // because the screen is now empty.
-    task_list[current_task_idx].first_x = 0;
-    task_list[current_task_idx].first_y = 0;
+    task_list[current_task_idx].first_x = 10000;
+    task_list[current_task_idx].first_y = 10000;
     task_list[current_task_idx].last_x = 0;
     task_list[current_task_idx].last_y = 0;
     task_list[current_task_idx].has_drawn = 0;
 }
-else if (regs->eax == 6) { // DRAW_RECT
+else if (regs->eax == 6) { // Syscall 6: DRAW_RECT
     int x = regs->ebx;
     int y = regs->ecx;
     int w = regs->edx;
     int h = regs->esi;          // We'll use ESI for height
     uint32_t color = regs->edi; // We'll use EDI for color
+    int id = current_task_idx;
 
-    // Update the Task's bounding box for auto-cleanup
-    if (x < task_list[current_task_idx].first_x) task_list[current_task_idx].first_x = x;
-    if (y < task_list[current_task_idx].first_y) task_list[current_task_idx].first_y = y;
-    if (x + w > task_list[current_task_idx].last_x) task_list[current_task_idx].last_x = x + w;
-    if (y + h > task_list[current_task_idx].last_y) task_list[current_task_idx].last_y = y + h;
+    if (task_list[id].has_window) {
+        // --- WINDOW MANAGER MODE ---
+        // Draw into the private canvas in RAM, NOT the screen!
+        for (int iy = 0; iy < h; iy++) {
+            for (int ix = 0; ix < w; ix++) {
+                int draw_x = x + ix;
+                int draw_y = y + iy;
+                
+                // Safety: Prevent memory corruption by clipping pixels 
+                // that try to draw outside the window boundaries!
+                if (draw_x >= 0 && draw_x < task_list[id].win_w && 
+                    draw_y >= 0 && draw_y < task_list[id].win_h) {
+                    
+                    // Math to find a 2D pixel in a 1D array: (Y * Width) + X
+                    int pixel_index = (draw_y * task_list[id].win_w) + draw_x;
+                    task_list[id].window_buffer[pixel_index] = color;
+                }
+            }
+        }
+        task_list[id].has_drawn = 1; // Flag that this window needs a repaint
+        
+    } else {
+        // --- LEGACY CLI MODE ---
+        // Keep your old behavior for apps that don't know about the GUI yet
+        if (x < task_list[id].first_x) task_list[id].first_x = x;
+        if (y < task_list[id].first_y) task_list[id].first_y = y;
+        if (x + w > task_list[id].last_x) task_list[id].last_x = x + w;
+        if (y + h > task_list[id].last_y) task_list[id].last_y = y + h;
 
-    task_list[current_task_idx].has_drawn = 1;
-    
-    VESA_draw_rect(x, y, w, h, color);
+        task_list[id].has_drawn = 1;
+        VESA_draw_rect(x, y, w, h, color);
+    }
 }
 else if (regs->eax == 7) { // Syscall 7: PRINT_STR
     // EBX contains the relative offset. Add code_ptr to get the actual address.
@@ -406,8 +463,33 @@ else if (regs->eax == 7) { // Syscall 7: PRINT_STR
 
     task_list[id].has_drawn = 1;
 }
+else if (regs->eax == 8) { // Syscall 8: CREATE_WINDOW
+        int x = regs->ebx; // Requested X
+        int y = regs->ecx; // Requested Y
+        int w = regs->edx; // Requested Width
+        int h = regs->esi; // Requested Height
+        int id = current_task_idx;
 
-else if (regs->eax == 9) { // PRINT_NUMBER
+        task_list[id].window_buffer = (uint32_t*)kmalloc(w * h * 4);
+        
+        if (task_list[id].window_buffer) {
+            task_list[id].win_w = w;
+            task_list[id].win_h = h;
+            
+            // Set the window exactly where the script asked for it!
+            task_list[id].win_x = x; 
+            task_list[id].win_y = y; 
+            
+            task_list[id].has_window = 1;
+
+            // Fill the background of the window with dark gray
+            for(int i = 0; i < (w * h); i++) {
+                task_list[id].window_buffer[i] = 0x222222; 
+            }
+        }
+    }
+
+  else if (regs->eax == 9) { // PRINT_NUMBER
     uint32_t val = regs->ebx;
     int x = regs->ecx;
     int y = regs->edx;

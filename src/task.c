@@ -47,9 +47,6 @@ void shell_task() {
             line[idx++] = c;
             char str[2] = {c, '\0'};
             VESA_print(str, COLOR_WHITE);
-            vesa_updating = 1; // LOCK THE SCREEN
-            VESA_flip();
-            vesa_updating = 0; // UNLOCK
         }
     }
 }
@@ -59,12 +56,17 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
         if (task_list[i].state == 0) {
             // 1. Reset Metadata & Set Name
             task_list[i].has_drawn = 0;
+            task_list[i].first_x = 10000; // Start at "infinity"
+            task_list[i].first_y = 10000; // Start at "infinity"
             task_list[i].last_x = 0;
             task_list[i].last_y = 0;
 
             // Initialize CPU Accounting and Sleep state ---
             task_list[i].total_ticks = 0;    // Reset CPU odometer
             task_list[i].sleep_ticks = 0;    // Ensure it doesn't start asleep
+            // Initialize GUI Data to 0
+            task_list[i].has_window = 0;
+            task_list[i].window_buffer = NULL;
       
             // Copy name safely
             kstrncpy((char*)task_list[i].name, name, 15);
@@ -152,8 +154,8 @@ void kill_task(int id) {
 
     // Reset everything for the next spawn
     task_list[id].has_drawn = 0;
-    task_list[id].first_x = 0;
-    task_list[id].first_y = 0;
+    task_list[id].first_x = 10000;
+    task_list[id].first_y = 10000;
     task_list[id].last_x = 0;
     task_list[id].last_y = 0;
 }
@@ -173,15 +175,30 @@ void init_multitasking() {
         task_list[i].state = 0; // DEAD
         task_list[i].kbd_head = 0;
         task_list[i].kbd_tail = 0;
+        task_list[i].first_x = 10000;
+        task_list[i].first_y = 10000;
     }
     
     // Task 0: Shell
     task_list[0].state = 1; // READY
     kstrncpy((char*)task_list[0].name, "shell", 15);
     keyboard_focus_tid = 0; // Ensure focus starts on shell
+    // GIVE THE SHELL A GUI WINDOW 
+    task_list[0].has_window = 1;
+    task_list[0].win_w = 600; // Window Width
+    task_list[0].win_h = 400; // Window Height
+    task_list[0].win_x = 50;  // Offset 50px from the left
+    task_list[0].win_y = 50;  // Offset 50px from the top
+    task_list[0].window_buffer = (uint32_t*)kmalloc(600 * 400 * 4);
+    
+    // Fill the terminal window with a dark grey background (Proper 32-bit loop)
+    for(int p = 0; p < (600 * 400); p++) {
+        task_list[0].window_buffer[p] = 0x222222;
+    }
     
     // Task 1: Idle Task (Always READY)
     spawn_task(idle_task_code, NULL, "idle");
+    spawn_task(compositor_task, NULL, "wm");
     
     current_task_idx = 0;
 }
@@ -361,4 +378,69 @@ int previous_focus = keyboard_focus_tid;
     keyboard_focus_tid = previous_focus;
     kprintf_unsync("Returned to Shell.\n");
   VESA_flip();
+}
+
+void compositor_task() {
+struct multiboot_info* boot_info = VESA_get_boot_info();
+    while(1) {
+        vesa_updating = 1; // LOCK
+
+        // 1. Draw the Desktop Background (Deep Blue)
+VESA_draw_rect(0, 0, boot_info->framebuffer_width, boot_info->framebuffer_height, 0x000033);
+
+        // 2. Loop through every task and draw their windows
+        
+        // 2. Loop through every task and draw their windows
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (task_list[i].state != 0 && task_list[i].has_window) {
+                
+                int border = 2;           
+                int title_bar = 15;       
+                uint32_t frame_color = 0x888888; 
+
+                // --- LAYER 1: THE HOLLOW FRAME (Window Area) ---
+                // X and Y now define the absolute top-left of the entire framed window
+                
+                // Top (Title Bar)
+                VESA_draw_rect(task_list[i].win_x, task_list[i].win_y, task_list[i].win_w + (border * 2), title_bar, frame_color);
+                // Bottom
+                VESA_draw_rect(task_list[i].win_x, task_list[i].win_y + title_bar + task_list[i].win_h, task_list[i].win_w + (border * 2), border, frame_color);
+                // Left
+                VESA_draw_rect(task_list[i].win_x, task_list[i].win_y + title_bar, border, task_list[i].win_h, frame_color);
+                // Right
+                VESA_draw_rect(task_list[i].win_x + border + task_list[i].win_w, task_list[i].win_y + title_bar, border, task_list[i].win_h, frame_color);
+
+                // --- LAYER 2: THE WINDOW CONTENT (Client Area) ---
+                for (int y = 0; y < task_list[i].win_h; y++) {
+                    for (int x = 0; x < task_list[i].win_w; x++) {
+                        
+                        // We offset the internal buffer so it sits safely INSIDE the borders and BELOW the title bar!
+                        int real_x = task_list[i].win_x + border + x;
+                        int real_y = task_list[i].win_y + title_bar + y;
+                        
+                        uint32_t pixel = task_list[i].window_buffer[(y * task_list[i].win_w) + x];
+                        VESA_draw_pixel(real_x, real_y, pixel); 
+                    }
+                }
+
+                // --- LAYER 3: THE TITLE TEXT ---
+                int title_x = task_list[i].win_x + 5;
+                // 4 pixels of padding pushes the text perfectly into the middle of the 15px title bar
+                int title_y = task_list[i].win_y + 4; 
+                char* name = (char*)task_list[i].name;
+                
+                while (*name) {
+                    VESA_draw_char(*name, title_x, title_y, 0xFFFFFF); 
+                    title_x += 8;
+                    name++; 
+                }
+            }
+        }
+        VESA_flip();
+        vesa_updating = 0; // UNLOCK
+        
+        // Let the compositor run at roughly 30 FPS (~33ms)
+        // Adjust this depending on your timer frequency!
+        sleep(30); 
+    }
 }

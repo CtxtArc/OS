@@ -61,6 +61,25 @@ char arg_str[32]; // Fixed: Declared here for general use
         }
         return; 
     }
+    // --- WINDOW: 5 Loads (30) + INT (2) = 32 bytes ---
+    else if (kstrcmp(cmd, "WINDOW") == 0) {
+        if (pass == 2) {
+            char t1[32], t2[32], t3[32], t4[32];
+            ptr = get_token(ptr, t1); // X
+            ptr = get_token(ptr, t2); // Y
+            ptr = get_token(ptr, t3); // W
+            ptr = get_token(ptr, t4); // H
+
+            emit_load(0xB8, "8", out_buf, pos); // Syscall 8: CREATE_WINDOW
+            emit_load(0xBB, t1, out_buf, pos);  // EBX: X
+            emit_load(0xB9, t2, out_buf, pos);  // ECX: Y
+            emit_load(0xBA, t3, out_buf, pos);  // EDX: W
+            emit_load(0xBE, t4, out_buf, pos);  // ESI: H
+            out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
+        } else {
+            *pos += 32;
+        }
+    }
 
     // --- GOTO: 5 bytes ---
     else if (kstrcmp(cmd, "GOTO") == 0) {
