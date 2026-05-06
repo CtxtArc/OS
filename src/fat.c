@@ -13,6 +13,7 @@ static uint32_t current_dir_cluster = 0; // 0 means Root Directory
 static uint8_t global_fat_buf[512] __attribute__((aligned(16)));
 static uint8_t raw_io_buffer[512] __attribute__((aligned(16)));
 
+
 unsigned char spinner_code[] = {
     // 1. Get Ticks (Syscall 2)
     0xB8, 0x02, 0x00, 0x00, 0x00, // [0]  MOV EAX, 2
@@ -39,12 +40,12 @@ unsigned char spinner_code[] = {
     0xBA, 0x05, 0x00, 0x00, 0x00, // [41] MOV EDX, 5  (Y)
     0xCD, 0x80,                   // [46] INT 0x80
 
-    // 6. Yield
-    0xCD, 0x20,                   // [48] INT 0x20
+    // 6. Yield (FIXED: Replaced INT 0x20 with HLT + NOP)
+    0xF4,                         // [48] HLT (Safely sleep until next hardware tick)
+    0x90,                         // [49] NOP (Keep byte count at 52 so JMP works)
 
     // 7. Loop back to index 0
     0xEB, 0xCC                    // [50] JMP -52 bytes
-    // Total size: 52 bytes. 52 - 52 = 0.
 };
 
 unsigned char clock_code[] = {
@@ -138,7 +139,7 @@ tail->size = (16 * 1024 * 1024) - ((uint32_t)tail - 0x800000) - sizeof(header_t)
 tail->is_free = 1;
 tail->next = NULL;
 
-fat_touch("SPINNER.BIN");
+/*fat_touch("SPINNER.BIN");
     fat_write_file_raw("SPINNER.BIN", (const uint8_t*)spinner_code, sizeof(spinner_code));
     //kprintf_color(0x00FF00, "SPINNER.BIN created successfully!\n");
     
@@ -146,6 +147,7 @@ fat_touch("SPINNER.BIN");
     fat_write_file_raw("CLOCK.BIN", (const uint8_t*)clock_code, sizeof(clock_code));
     //kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
     //test_multi_sector_write();
+*/
 }
 
 // Helper to convert Cluster to LBA

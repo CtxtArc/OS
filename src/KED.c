@@ -88,7 +88,7 @@ void run_editor(const char* filename) {
                 }
             }
         }
-        yield(); // Let the Spinner keep spinning!
+        yield(); // Let the Spinner keep spinning lol!
     }
 
     kfree(text_buffer);

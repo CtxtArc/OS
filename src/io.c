@@ -6,6 +6,7 @@ static int head = 0;
 static int tail = 0;
 extern int keyboard_focus_tid;
 extern int current_task_idx;
+extern struct task task_list[];
 // This is what the Linker is looking for!
 int has_key_in_buffer() {
     return head != tail;
@@ -38,23 +39,29 @@ uint8_t keyboard_read_scancode() {
 
 char keyboard_getchar() {
     while (1) {
-        // 1. If this task does NOT have focus, it must not touch the buffer!
-        // It just yields and waits for its turn to be the foreground task.
+        // 1. Check focus. If we don't have the microphone, just wait.
         if (current_task_idx != keyboard_focus_tid) {
             yield();
-            continue; 
+            continue;
         }
 
-        // 2. If we HAVE focus, check if there is a key waiting
-       if (has_key_in_buffer()) {
-        asm volatile("cli"); // Disable interrupts
-        char c = get_key_from_buffer();
-        asm volatile("sti"); // Enable interrupts
-        return c;
-      }
+        volatile struct task *me = &task_list[current_task_idx];
 
-        // 3. No key? Yield to let other tasks (like the Spinner) run
-        yield();
+        // 2. Atomic check of the mailbox
+        asm volatile("cli");
+        if (me->kbd_head != me->kbd_tail) {
+            char c = me->kbd_buffer[me->kbd_tail];
+            me->kbd_tail = (me->kbd_tail + 1) % 64; // Make sure this matches your task struct size!
+            asm volatile("sti");
+            return c;
+        }
+
+        // 3. NO KEY: Put the task to sleep (Block)
+        me->state = 3; 
+        asm volatile("sti");
+        
+        // 4. Sleep until the keyboard wakes us
+        yield(); 
     }
 }
 

@@ -6,7 +6,6 @@
 #include "shell.h"
 #include "lib.h"
 
-#define MAX_TASKS 10
 int keyboard_focus_tid = 0; // Default focus is the Shell (Task 0)
 extern int vesa_updating;
 // External assembly function
@@ -24,7 +23,7 @@ void shell_task() {
     VESA_print("> ", COLOR_YELLOW);
 
     while(1) {
-        char c = keyboard_getchar(); // This must call yield() internally if no key
+        char c = keyboard_getchar(); // This calls yield() internally if no key
 
         if (c == '\n') {
             line[idx] = '\0';
@@ -48,6 +47,9 @@ void shell_task() {
             line[idx++] = c;
             char str[2] = {c, '\0'};
             VESA_print(str, COLOR_WHITE);
+            vesa_updating = 1; // LOCK THE SCREEN
+            VESA_flip();
+            vesa_updating = 0; // UNLOCK
         }
     }
 }
@@ -119,7 +121,7 @@ uint32_t task_stacks[MAX_TASKS][1024];
 
 // Correct yield loop logic
 void yield() {
-    __asm__ volatile("int $0x20"); // Trigger the Timer Interrupt manually
+    __asm__ volatile("hlt"); // Trigger the Timer Interrupt manually
 }
 
 void kill_task(int id) {
@@ -161,21 +163,24 @@ void idle_task_code() {
         __asm__ volatile("hlt");
     }
 }
+
 void init_multitasking() {
     multitasking_enabled = 1;
-    for (int i = 0; i < MAX_TASKS; i++){
-      task_list[i].state = 0;
-      task_list[i].first_x = 0; // Default to 0 for the shell
-      task_list[i].first_y = 0;
-      task_list[i].last_x = 0;
-      task_list[i].last_y = 0;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        // Zero everything!
+        //kmemset((void*)&task_list[i], 0, sizeof(struct task));
+        
+        task_list[i].state = 0; // DEAD
+        task_list[i].kbd_head = 0;
+        task_list[i].kbd_tail = 0;
     }
-    // Task 0: Shell
-    task_list[0].state = 1;
-    kstrncpy((char* )task_list[0].name, "shell", 15);
     
-    // Task 9: Idle Task (Always READY)
-    // Use your existing spawn_task logic or manually set it up
+    // Task 0: Shell
+    task_list[0].state = 1; // READY
+    kstrncpy((char*)task_list[0].name, "shell", 15);
+    keyboard_focus_tid = 0; // Ensure focus starts on shell
+    
+    // Task 1: Idle Task (Always READY)
     spawn_task(idle_task_code, NULL, "idle");
     
     current_task_idx = 0;

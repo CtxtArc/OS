@@ -4,10 +4,10 @@
 
 #define MAX_TASKS 10
 #define STACK_SIZE 4096
-
+#define TASK_KBD_BUF_SIZE 64
 struct task {
     uint32_t esp;
-    uint32_t state; // 0 = empty, 1 = ready, 2 = sleep 
+    uint32_t state; // 0 = empty, 1 = ready, 2 = sleep, 3 = blocked 
     uint32_t sleep_ticks;
     char name[16];
     uint32_t vga_index; // Store the character position (0-3999)
@@ -19,6 +19,10 @@ struct task {
     void* stack_ptr; // Store this so we can kfree it!
     void* code_ptr;  // Store this so we can kfree it!
     uint32_t total_ticks; // Accumulated CPU time
+    // --- Private Keyboard Mailbox ---
+    char kbd_buffer[TASK_KBD_BUF_SIZE];
+    uint8_t kbd_head;
+    uint8_t kbd_tail;
 };
 
 void init_multitasking();

@@ -14,8 +14,9 @@
 extern int vesa_updating;
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
-extern uint32_t timer_frequency;        // Add this!
+extern uint32_t timer_frequency;
 extern uint32_t target_fps;
+extern int keyboard_focus_tid;
 // Helper to find arguments
 char* find_space(char* str) {
     while (*str) {
@@ -84,43 +85,48 @@ else if (kstrcmp(input, "KED") == 0) {
     }
 }
 else if (kstrcmp(input, "RUN_TEST") == 0) {
-    // The raw bytes of the spinner program
+    // 62-byte payload using Syscall 3 (SLEEP 10ms) instead of HLT
     uint8_t test_code[] = {
-        0xB8, 0x02, 0x00, 0x00, 0x00, 0xCD, 0x80, 0xC1, 0xE8, 0x05,
-        0x83, 0xE0, 0x03, 0xBB, 0x2D, 0x5C, 0x7C, 0x2F, 0x88, 0xC1,
-        0xC1, 0xE1, 0x03, 0xD3, 0xEB, 0x81, 0xE3, 0xFF, 0x00, 0x00,
-        0x00, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xB9, 0xE8, 0x03, 0x00,
-        0x00, 0xBA, 0x05, 0x00, 0x00, 0x00, 0xCD, 0x80, 0xB8, 0x03,
-        0x00, 0x00, 0x00, 0xBB, 0x01, 0x00, 0x00, 0x00, 0xCD, 0x80,
-        0xEB, 0xC4
+        // 1. Get Ticks
+        0xB8, 0x02, 0x00, 0x00, 0x00, // [0] MOV EAX, 2
+        0xCD, 0x80,                   // [5] INT 0x80
+        // 2. Math
+        0xC1, 0xE8, 0x05,             // [7] SHR EAX, 5
+        0x83, 0xE0, 0x03,             // [10] AND EAX, 3
+        0xBB, 0x2D, 0x5C, 0x7C, 0x2F, // [13] MOV EBX, '-' '\' '|' '/'
+        0x88, 0xC1,                   // [18] MOV CL, AL
+        0xC1, 0xE1, 0x03,             // [20] SHL CL, 3
+        0xD3, 0xEB,                   // [23] SHR EBX, CL
+        0x81, 0xE3, 0xFF, 0x00, 0x00, 0x00, // [25] AND EBX, 0xFF
+        // 3. Print
+        0xB8, 0x01, 0x00, 0x00, 0x00, // [31] MOV EAX, 1
+        0xB9, 0xE8, 0x03, 0x00, 0x00, // [36] MOV ECX, 1000
+        0xBA, 0x05, 0x00, 0x00, 0x00, // [41] MOV EDX, 5
+        0xCD, 0x80,                   // [46] INT 0x80
+        // 4. Sleep(10ms) -> The Magic Fix
+        0xB8, 0x03, 0x00, 0x00, 0x00, // [48] MOV EAX, 3
+        0xBB, 0xF4, 0x01, 0x00, 0x00, // [53] MOV EBX, 500
+        0xCD, 0x80,                   // [58] INT 0x80
+        // 5. Jump back perfectly to 0
+        0xEB, 0xC2                    // [60] JMP -62 bytes 
     };
 
     kprintf_color(0xFFFF00, "Starting RUN_TEST (Bypassing FAT)...\n");
 
-    // 1. Allocate raw memory
     uint32_t code_size = sizeof(test_code);
-    void* raw_mem = kmalloc(code_size + 8192); // Extra room for alignment
+    void* raw_mem = kmalloc(code_size + 8192); 
     
     if (!raw_mem) {
         kprintf_color(0xFF0000, "RUN_TEST: kmalloc failed!\n");
         return;
     }
 
-    // 2. Calculate Page Alignment (Same logic as RUN)
     uint32_t raw_addr = (uint32_t)raw_mem;
-    uint32_t aligned_exec;
-    if ((raw_addr & 0xFFF) == 0) {
-        aligned_exec = raw_addr;
-    } else {
-        aligned_exec = (raw_addr + 0x1000) & 0xFFFFF000;
-    }
+    uint32_t aligned_exec = ((raw_addr & 0xFFF) == 0) ? raw_addr : (raw_addr + 0x1000) & 0xFFFFF000;
 
     kprintf("Allocated: 0x%x, Aligned Entry: 0x%x\n", raw_addr, aligned_exec);
-
-    // 3. Copy hardcoded code to the execution area
     kmemcpy((void*)aligned_exec, test_code, code_size);
 
-    // 4. Spawn the task
     int tid = spawn_task((void(*)())aligned_exec, raw_mem, "TEST_SPIN");
 
     if (tid != -1) {
@@ -128,8 +134,7 @@ else if (kstrcmp(input, "RUN_TEST") == 0) {
     } else {
         kprintf_color(0xFF0000, "spawn_task failed!\n");
     }
-}
-else if (kstrcmp(input, "MKDIR") == 0) {
+}else if (kstrcmp(input, "MKDIR") == 0) {
     if (arg) {
         fat_mkdir(arg);
     } else {
@@ -189,6 +194,7 @@ else if (kstrcmp(input, "RUN") == 0) {
                     kmemcpy((void*)aligned_code, file_data, size);
                     kfree(file_data); 
                     int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
+                    keyboard_focus_tid = 0;
                     kprintf_unsync("Spawned %s (TID: %d, Entry: 0x%x)\n", arg, tid, aligned_code);
                 }
         }
@@ -324,7 +330,7 @@ else if (kstrcmp(input, "PWD") == 0) {
     else if (kstrcmp(input, "PS") == 0) {
         kprintf_unsync("TID   NAME         STATE\n");
         for (int i = 0; i < MAX_TASKS; i++) {
-            if (task_is_ready(i)) {
+            if (task_get_state(i) != 0) { 
                 char* name = task_get_name(i);
                 kprintf_unsync("%d     %s", i, name);
                 int len = kstrlen(name);
@@ -332,6 +338,7 @@ else if (kstrcmp(input, "PWD") == 0) {
                 
                 if (task_get_state(i) == 1)      kprintf_unsync(" READY\n");
                 else if (task_get_state(i) == 2) kprintf_unsync(" SLEEP\n");
+                else if (task_get_state(i) == 3) kprintf_unsync(" BLOCKED\n");
             }
         }
     }
@@ -383,7 +390,6 @@ else if (kstrcmp(input, "PWD") == 0) {
     }
    
     int lines_touched = (vesa_cursor_y - start_y) + 12;
-    vesa_updating = 0; 
     struct multiboot_info* boot_info = VESA_get_boot_info();
     if (lines_touched > 0 && lines_touched < (int)boot_info->framebuffer_height) {
         VESA_flip_rows(start_y, lines_touched);
@@ -391,6 +397,8 @@ else if (kstrcmp(input, "PWD") == 0) {
         // If we scrolled, the whole screen changed, just do a full flip
         VESA_flip();
     }
+
+        vesa_updating = 0; 
 }
 void shell_compile(const char* arg) {
     struct fat_dir_entry* file = fat_search(arg);
