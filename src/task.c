@@ -21,13 +21,17 @@ void shell_task() {
 
     VESA_print("KDXOS Shell Started.\n", COLOR_CYAN);
     VESA_print("> ", COLOR_YELLOW);
+    task_list[0].has_drawn = 1; // Force the initial prompt to draw
 
     while(1) {
+        // Line wrap logic
         if (task_list[0].cursor_x >= task_list[0].win_w) {
             task_list[0].cursor_x = 0;
             task_list[0].cursor_y += 10;
         }
 
+        // keyboard_getchar() safely puts the Shell to sleep (0% CPU) 
+        // and instantly wakes it up the millisecond a key is pressed!
         char c = keyboard_getchar();
 
         if (c == '\n') {
@@ -36,22 +40,23 @@ void shell_task() {
             if (idx > 0) execute_command(line);
             idx = 0;
             VESA_print("> ", COLOR_YELLOW);
-            task_list[0].has_drawn = 1;  
         }
         else if (c == '\b' && idx > 0) {
             idx--;
             if (task_list[0].cursor_x >= 8) task_list[0].cursor_x -= 0x08;
             VESA_draw_char(' ', task_list[0].cursor_x, task_list[0].cursor_y, 0x222222);
-            task_list[0].has_drawn = 1;
         }
         else if (idx < 127 && c >= ' ') {
             line[idx++] = c;
             char str[2] = {c, '\0'};
             VESA_print(str, COLOR_WHITE);
         }
+        
+        // --- THE FIX ---
+        // Tell the Compositor to push whatever we just did to the screen immediately!
+        task_list[0].has_drawn = 1;  
     }
 }
-
 int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
     for (int i = 1; i < MAX_TASKS; i++) {
         if (task_list[i].state == 0) {

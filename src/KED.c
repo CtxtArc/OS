@@ -51,6 +51,12 @@ void KED_task() {
     int last_cursor_state = -1;
 
     while (1) {
+        // SAFETY: Wait for the compositor to give us a real width
+        if (task_list[current_task_idx].win_w == 0) {
+            yield();
+            continue;
+        }
+
         // 1. Check if the cursor needs to blink
         int current_cursor_state = (system_ticks / 20) % 2;
         if (current_cursor_state != last_cursor_state) {
@@ -60,6 +66,11 @@ void KED_task() {
 
         // 2. ONLY draw if something actually changed!
         if (needs_redraw) {
+            
+            // --- THE ATOMIC SHIELD ---
+            // Lock out the hardware timer. The Compositor cannot interrupt us now.
+            __asm__ volatile("cli");
+
             VESA_clear_buffer_only();
             
             // Use VESA_print_unsync directly to avoid vsprintf buffer overflows!
@@ -77,6 +88,10 @@ void KED_task() {
 
             task_list[current_task_idx].has_drawn = 1;
             needs_redraw = 0; // Reset flag so we don't draw next frame
+
+            // --- LOWER THE SHIELD ---
+            // Allow the OS scheduler to tick again.
+            __asm__ volatile("sti");
         }
 
         // 3. Handle Input
