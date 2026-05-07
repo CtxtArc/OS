@@ -31,6 +31,8 @@ struct task {
     int win_y;              // Where the window sits on the real screen (Y)
     int win_w;              // Window Width
     int win_h;              // Window Height
+    int cursor_x;
+    int cursor_y;
 };
 
 void init_multitasking();
@@ -50,7 +52,10 @@ void task_timer();
 void task_game();
 void run_top();
 
-
+void refresh_tiling_layout();
+void task_create_window(int tid, int x, int y, int w, int h);
+extern volatile struct task task_list[MAX_TASKS]; 
+extern int vesa_dirty; // Useful for the shell to trigger refreshes
 
 void compositor_task();
 #endif

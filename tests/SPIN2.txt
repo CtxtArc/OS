@@ -1,22 +1,20 @@
-# Create a window at X=800, Y=20 with Width=100, Height=100
-# (If your screen is smaller, try X=650 instead!)
 WINDOW 800 20 100 100
 
 LABEL loop
     RECT 10 10 10 10 0x222222
     PRINT "/" 10 10 0xFFFFFF
-    SLEEP 200
+    SLEEP 100
     
     RECT 10 10 10 10 0x222222
     PRINT "-" 10 10 0xFFFFFF
-    SLEEP 200
+    SLEEP 100
     
     RECT 10 10 10 10 0x222222
     PRINT "\" 10 10 0xFFFFFF
-    SLEEP 200
+    SLEEP 100
     
     RECT 10 10 10 10 0x222222
     PRINT "|" 10 10 0xFFFFFF
-    SLEEP 200
+    SLEEP 100
     
 GOTO loop

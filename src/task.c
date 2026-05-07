@@ -6,15 +6,16 @@
 #include "shell.h"
 #include "lib.h"
 
-int keyboard_focus_tid = 0; // Default focus is the Shell (Task 0)
+extern uint32_t* VESA_get_back_buffer();
+int keyboard_focus_tid = 0;
 extern int vesa_updating;
-// External assembly function
 extern void switch_to_stack(uint32_t* old_esp, uint32_t new_esp);
 extern volatile uint32_t system_ticks;
 int multitasking_enabled = 0;
-// The Task Control Block (TCB) array
 volatile struct task task_list[MAX_TASKS];
 int current_task_idx = 0;
+
+
 void shell_task() {
     char line[128];
     int idx = 0;
@@ -23,26 +24,27 @@ void shell_task() {
     VESA_print("> ", COLOR_YELLOW);
 
     while(1) {
-        char c = keyboard_getchar(); // This calls yield() internally if no key
+        if (task_list[0].cursor_x >= task_list[0].win_w) {
+            task_list[0].cursor_x = 0;
+            task_list[0].cursor_y += 10;
+        }
+
+        char c = keyboard_getchar();
 
         if (c == '\n') {
             line[idx] = '\0';
             VESA_print("\n", COLOR_WHITE);
-            if (idx > 0) {
-                execute_command(line); 
-            }
-            //vesa_updating = 0; 
+            if (idx > 0) execute_command(line);
             idx = 0;
             VESA_print("> ", COLOR_YELLOW);
-        } 
+    task_list[0].has_drawn = 1;  // ensure compositor picks up the prompt too
+        }
         else if (c == '\b' && idx > 0) {
-            // backspace and non empty line
             idx--;
-            if (vesa_cursor_x >= 8) {
-              vesa_cursor_x -= 8;
-            }
-            VESA_draw_char(' ', vesa_cursor_x, vesa_cursor_y, 0x222222); 
-        } 
+            if (task_list[0].cursor_x >= 8) task_list[0].cursor_x -= 0x08;
+            VESA_draw_char(' ', task_list[0].cursor_x, task_list[0].cursor_y, 0x222222);
+            task_list[0].has_drawn = 1;
+        }
         else if (idx < 127 && c >= ' ') {
             line[idx++] = c;
             char str[2] = {c, '\0'};
@@ -54,158 +56,106 @@ void shell_task() {
 int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
     for (int i = 1; i < MAX_TASKS; i++) {
         if (task_list[i].state == 0) {
-            // 1. Reset Metadata & Set Name
+            kstrncpy((char*)task_list[i].name, name, 15);
+            task_list[i].name[15] = '\0';
+            task_list[i].total_ticks = 0;
+            task_list[i].sleep_ticks = 0;
             task_list[i].has_drawn = 0;
-            task_list[i].first_x = 10000; // Start at "infinity"
-            task_list[i].first_y = 10000; // Start at "infinity"
-            task_list[i].last_x = 0;
-            task_list[i].last_y = 0;
-
-            // Initialize CPU Accounting and Sleep state ---
-            task_list[i].total_ticks = 0;    // Reset CPU odometer
-            task_list[i].sleep_ticks = 0;    // Ensure it doesn't start asleep
-            // Initialize GUI Data to 0
             task_list[i].has_window = 0;
             task_list[i].window_buffer = NULL;
-      
-            // Copy name safely
-            kstrncpy((char*)task_list[i].name, name, 15);
-            task_list[i].name[15] = '\0'; 
 
-            // 2. Allocate RAW memory (Store this for kfree)
-            // We allocate 8KB to ensure we can find a 4KB aligned block inside
             void* raw_stack = kmalloc(4096 + 0x1000);
             if (!raw_stack) return -1;
+            task_list[i].stack_ptr = raw_stack;
+            task_list[i].code_ptr = code_ptr;
 
-            task_list[i].stack_ptr = raw_stack; 
-            task_list[i].code_ptr = code_ptr; 
-
-            // 3. Calculate the ALIGNED stack for the CPU
             uint32_t aligned_stack = (uint32_t)raw_stack;
             if (aligned_stack & 0xFFF) {
                 aligned_stack &= 0xFFFFF000;
                 aligned_stack += 0x1000;
             }
 
-            // 4. Build the stack frame at the TOP of the aligned 4KB
             uint32_t* s_ptr = (uint32_t*)(aligned_stack + 4096);
-
-            // --- THE IRET FRAME ---
-            *--s_ptr = 0x10;                     // SS
-            uint32_t task_stack_top = (uint32_t)s_ptr; 
-            *--s_ptr = task_stack_top;           // ESP
-            *--s_ptr = 0x202;                    // EFLAGS
-            *--s_ptr = 0x08;                     // CS
-            *--s_ptr = (uint32_t)entry_point;    // EIP
-
-            // --- INT DATA (Matches irq0_handler) ---
-            *--s_ptr = 0;                        // err_code
-            *--s_ptr = 32;                       // int_no (Timer)
-
-            // --- PUSHA FRAME ---
+            *--s_ptr = 0x10;
+            uint32_t task_stack_top = (uint32_t)s_ptr;
+            *--s_ptr = task_stack_top;
+            *--s_ptr = 0x202;
+            *--s_ptr = 0x08;
+            *--s_ptr = (uint32_t)entry_point;
+            *--s_ptr = 0;
+            *--s_ptr = 32;
             for(int j = 0; j < 8; j++) *--s_ptr = 0;
+            *--s_ptr = 0x10;
 
-            // --- DATA SEGMENT ---
-            *--s_ptr = 0x10;                     // DS
-
-            // 5. Save final ESP and set to READY
             task_list[i].esp = (uint32_t)s_ptr;
-            task_list[i].state = 1; 
-            
+            task_list[i].state = 1;
             return i;
         }
     }
     return -1;
 }
 
-// Stacks for the tasks (10 stacks of 4KB each)
 uint32_t task_stacks[MAX_TASKS][1024];
 
-// Correct yield loop logic
 void yield() {
-    __asm__ volatile("hlt"); // Trigger the Timer Interrupt manually
+    __asm__ volatile("hlt");
 }
 
 void kill_task(int id) {
     if (id <= 0 || id >= MAX_TASKS) return;
 
-    if (task_list[id].has_drawn) {
-        int w = task_list[id].last_x - task_list[id].first_x;
-        int h = task_list[id].last_y - task_list[id].first_y;
-        
-        // Safety check to prevent massive unsigned underflow clears
-        if (w > 0 && w < 2000 && h > 0 && h < 2000) {
-            VESA_clear_region(task_list[id].first_x, task_list[id].first_y, w, h);
-            VESA_flip(); 
+    if (task_list[id].has_window) {
+        int border = 2;
+        int title_bar = 15;
+        int full_w = task_list[id].win_w + (border * 2);
+        int full_h = task_list[id].win_h + title_bar + border;
+        VESA_clear_region(task_list[id].win_x, task_list[id].win_y, full_w, full_h);
+        vesa_updating = 1;
+        VESA_flip();
+        vesa_updating = 0;
+        if (task_list[id].window_buffer) {
+            kfree(task_list[id].window_buffer);
+            task_list[id].window_buffer = NULL;
         }
     }
 
-    // Mark as dead immediately to stop the scheduler from picking it
     task_list[id].state = 0;
-
-    if (task_list[id].stack_ptr) {
-        kfree(task_list[id].stack_ptr);
-        task_list[id].stack_ptr = NULL;
-    }
-    if (task_list[id].code_ptr) {
-        kfree(task_list[id].code_ptr);
-        task_list[id].code_ptr = NULL;
-    }
-
-    // Reset everything for the next spawn
-    task_list[id].has_drawn = 0;
-    task_list[id].first_x = 10000;
-    task_list[id].first_y = 10000;
-    task_list[id].last_x = 0;
-    task_list[id].last_y = 0;
+    if (task_list[id].stack_ptr) { kfree(task_list[id].stack_ptr); task_list[id].stack_ptr = NULL; }
+    if (task_list[id].code_ptr)  { kfree(task_list[id].code_ptr);  task_list[id].code_ptr  = NULL; }
+    task_list[id].has_window = 0;
+    task_list[id].has_drawn  = 0;
 }
 
 void idle_task_code() {
-    while(1) {
-        __asm__ volatile("hlt");
-    }
+    while(1) __asm__ volatile("hlt");
 }
 
 void init_multitasking() {
     multitasking_enabled = 1;
+
     for (int i = 0; i < MAX_TASKS; i++) {
-        // Zero everything!
-        //kmemset((void*)&task_list[i], 0, sizeof(struct task));
-        
-        task_list[i].state = 0; // DEAD
-        task_list[i].kbd_head = 0;
-        task_list[i].kbd_tail = 0;
-        task_list[i].first_x = 10000;
-        task_list[i].first_y = 10000;
+        task_list[i].state         = 0;
+        task_list[i].has_window    = 0;
+        task_list[i].window_buffer = NULL;
+        task_list[i].kbd_head      = 0;
+        task_list[i].kbd_tail      = 0;
+        task_list[i].total_ticks   = 0;
+        task_list[i].sleep_ticks   = 0;
     }
-    
-    // Task 0: Shell
-    task_list[0].state = 1; // READY
+
+    task_list[0].state = 1;
     kstrncpy((char*)task_list[0].name, "shell", 15);
-    keyboard_focus_tid = 0; // Ensure focus starts on shell
-    // GIVE THE SHELL A GUI WINDOW 
-    task_list[0].has_window = 1;
-    task_list[0].win_w = 600; // Window Width
-    task_list[0].win_h = 400; // Window Height
-    task_list[0].win_x = 50;  // Offset 50px from the left
-    task_list[0].win_y = 50;  // Offset 50px from the top
-    task_list[0].window_buffer = (uint32_t*)kmalloc(600 * 400 * 4);
-    
-    // Fill the terminal window with a dark grey background (Proper 32-bit loop)
-    for(int p = 0; p < (600 * 400); p++) {
-        task_list[0].window_buffer[p] = 0x222222;
-    }
-    
-    // Task 1: Idle Task (Always READY)
+    keyboard_focus_tid = 0;
+    task_create_window(0, 50, 50, 600, 400);
+
     spawn_task(idle_task_code, NULL, "idle");
     spawn_task(compositor_task, NULL, "wm");
-    
+
     current_task_idx = 0;
+    refresh_tiling_layout();
 }
-// Helper function
-int get_current_task_id() {
-    return current_task_idx;
-}
+
+int get_current_task_id() { return current_task_idx; }
 
 int task_is_ready(int id) {
     if (id < 0 || id >= MAX_TASKS) return 0;
@@ -222,119 +172,96 @@ char* task_get_name(int id) {
     return (char*)task_list[id].name;
 }
 
-int task_get_state(int id){
+int task_get_state(int id) {
     if (id < 0 || id >= MAX_TASKS) return -1;
     return task_list[id].state;
 }
-int task_get_sleep_ticks(int id){
-  if (id < 0 || id >= MAX_TASKS) return -1;
-  return task_list[id].sleep_ticks;
+
+int task_get_sleep_ticks(int id) {
+    if (id < 0 || id >= MAX_TASKS) return -1;
+    return task_list[id].sleep_ticks;
 }
-int task_get_total_ticks(int id){
-  if (id < 0 || id >= MAX_TASKS) return -1;
-  return task_list[id].total_ticks;
+
+int task_get_total_ticks(int id) {
+    if (id < 0 || id >= MAX_TASKS) return -1;
+    return task_list[id].total_ticks;
 }
+
 void task_timer() {
     uint32_t seconds = 0;
     while (1) {
         seconds++;
-
         char buf[20];
         kmemset(buf, 0, 20);
         kstrcpy(buf, "TIMER: ");
-        itoa(seconds, buf + 7, 10); 
-        VESA_print_at(buf, 900, 10, 0x00FFFF); 
-
-        sleep(1000); 
+        itoa(seconds, buf + 7, 10);
+        VESA_print_at(buf, 900, 10, 0x00FFFF);
+        sleep(1000);
     }
 }
+
 void task_game() {
     int previous_focus = keyboard_focus_tid;
     keyboard_focus_tid = current_task_idx;
-    
-  // 1. Preparation
+
     while (has_key_in_buffer()) { get_key_from_buffer(); }
-    
-    vesa_updating = 1;      // Lock out background flips
-    VESA_clear();           // Full screen clear for "App Mode"
+
+    vesa_updating = 1;
+    VESA_clear();
     vesa_updating = 0;
 
     int x = 500, y = 500;
     int old_x = 500, old_y = 500;
     int exit = 0;
 
-    // 2. Initial Draw
     VESA_draw_char('*', x, y, 0x00FFFF);
     VESA_flip();
 
     while (exit == 0) {
         if (has_key_in_buffer()) {
             char c = get_key_from_buffer();
-            
-            if (c == 'q' || c == 'Q') {
-                exit = 1;
-                break;
-            }
+            if (c == 'q' || c == 'Q') { exit = 1; break; }
 
-            // Save old coordinates to erase them
-            old_x = x;
-            old_y = y;
-
-            switch (c) {  
+            old_x = x; old_y = y;
+            switch (c) {
                 case 'w': y -= 8; break;
                 case 's': y += 8; break;
                 case 'a': x -= 8; break;
                 case 'd': x += 8; break;
             }
 
-            // 3. Optimized Rendering
             vesa_updating = 1;
-            
-            // Wipe ONLY the 8x8 pixels of the previous position
             VESA_clear_region(old_x, old_y, 8, 8);
-            
-            // Draw new position
             VESA_draw_char('*', x, y, 0x00FFFF);
-
-            // TIGHTEN the metadata box so 'KILL' only wipes the current player
             task_list[current_task_idx].first_x = x;
             task_list[current_task_idx].first_y = y;
-            task_list[current_task_idx].last_x = x + 8;
-            task_list[current_task_idx].last_y = y + 8;
-
+            task_list[current_task_idx].last_x  = x + 8;
+            task_list[current_task_idx].last_y  = y + 8;
             vesa_updating = 0;
-            VESA_flip(); 
+            VESA_flip();
         } else {
-            // Stay polite! Let the spinner and shell logic breathe
             yield();
         }
     }
 
-    // 4. Exit Cleanup
     vesa_updating = 1;
-    VESA_clear(); // Clear the game screen before returning to shell
+    VESA_clear();
     vesa_updating = 0;
     keyboard_focus_tid = previous_focus;
-    // Reset Shell cursor to top-left so the prompt looks right
-    vesa_cursor_x = 0;
-    vesa_cursor_y = 0;
+    task_list[current_task_idx].cursor_x = 0;
+    task_list[current_task_idx].cursor_y = 0;
 }
+
 void run_top() {
-int previous_focus = keyboard_focus_tid;
+    int previous_focus = keyboard_focus_tid;
     keyboard_focus_tid = current_task_idx;
 
-// 1. CLEAR the keyboard buffer so we don't process old keys
-    while (has_key_in_buffer()) {
-        get_key_from_buffer();
-    }
-    // Initial clear
+    while (has_key_in_buffer()) { get_key_from_buffer(); }
     VESA_clear();
-    
-    while (1) {
-        // Move cursor to 0,0 or clear
-          vesa_updating = 1;         // Lock the timer out
-        VESA_clear_buffer_only();
 
+    while (1) {
+        vesa_updating = 1;
+        VESA_clear_buffer_only();
 
         kprintf_unsync("KDXOS TOP - System Ticks: %d\n", system_ticks);
         kprintf_unsync("Press 'q' to return to Shell\n");
@@ -343,104 +270,141 @@ int previous_focus = keyboard_focus_tid;
 
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_get_state(i) != 0) {
-                // Print TID and Name
                 kprintf_unsync("%d     %s", i, task_get_name(i));
-
-                // Manual Padding for Name Column (since no %-13s)
                 int name_len = kstrlen(task_get_name(i));
                 for (int j = 0; j < (13 - name_len); j++) kprintf_unsync(" ");
-
-                // Print State
-                if (task_get_state(i) == 1)      kprintf_unsync("READY      ");
+                if      (task_get_state(i) == 1) kprintf_unsync("READY      ");
                 else if (task_get_state(i) == 2) kprintf_unsync("SLEEP      ");
-
-                // Print Ticks (We added this field to the task struct earlier)
                 kprintf_unsync("%d\n", task_get_total_ticks(i));
             }
         }
-        vesa_updating = 0;         // Unlock
-        VESA_flip();               // Show finished frame
 
+        vesa_updating = 0;
+        VESA_flip();
 
-        // --- NON-BLOCKING CHECK ---
-        // We use your io.c functions here
         if (has_key_in_buffer()) {
-            char c = get_key_from_buffer(); 
-            if (c == 'q' || c == 'Q') {
-                break; // Exit the loop
-            }
+            char c = get_key_from_buffer();
+            if (c == 'q' || c == 'Q') break;
         }
-               sleep(500); 
+        sleep(500);
     }
-    
-    VESA_clear_buffer_only();
 
+    VESA_clear_buffer_only();
     keyboard_focus_tid = previous_focus;
     kprintf_unsync("Returned to Shell.\n");
-  VESA_flip();
+    VESA_flip();
+}
+
+void refresh_tiling_layout() {
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t sw = mbi->framebuffer_width;
+    uint32_t sh = mbi->framebuffer_height;
+
+    int gui_tasks = 0;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (task_list[i].state != 0 && task_list[i].has_window) gui_tasks++;
+    }
+
+    if (gui_tasks > 0) {
+        int tile_width = sw / gui_tasks;
+        int current_tile = 0;
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (task_list[i].state != 0 && task_list[i].has_window) {
+                task_list[i].win_x = current_tile * tile_width;
+                task_list[i].win_w = tile_width;
+                task_list[i].win_h = sh;
+                current_tile++;
+            }
+        }
+    }
+}
+
+void task_create_window(int tid, int x, int y, int w, int h) {
+    if (tid < 0 || tid >= MAX_TASKS) return;
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t full_size = mbi->framebuffer_width * mbi->framebuffer_height;
+
+    task_list[tid].has_window  = 1;
+    task_list[tid].win_x       = x;
+    task_list[tid].win_y       = y;
+    task_list[tid].win_w       = w;
+    task_list[tid].win_h       = h;
+    task_list[tid].cursor_x    = 0;
+    task_list[tid].cursor_y    = 0;
+
+    task_list[tid].window_buffer = (uint32_t*)kmalloc(full_size * 4);
+    if (task_list[tid].window_buffer) {
+        for (uint32_t p = 0; p < full_size; p++)
+            task_list[tid].window_buffer[p] = 0x222222;
+    }
+    task_list[tid].has_drawn = 1;
 }
 
 void compositor_task() {
-struct multiboot_info* boot_info = VESA_get_boot_info();
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t sw = mbi->framebuffer_width;
+    uint32_t sh = mbi->framebuffer_height;
+    uint32_t* b_buffer = VESA_get_back_buffer();
+    int last_gui_count = 0;
+
     while(1) {
-        vesa_updating = 1; // LOCK
+        if (vesa_updating) { yield(); continue; }
 
-        // 1. Draw the Desktop Background (Deep Blue)
-VESA_draw_rect(0, 0, boot_info->framebuffer_width, boot_info->framebuffer_height, 0x000033);
-
-        // 2. Loop through every task and draw their windows
-        
-        // 2. Loop through every task and draw their windows
+        int gui_tasks  = 0;
+        int needs_update = 0;
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_list[i].state != 0 && task_list[i].has_window) {
-                
-                int border = 2;           
-                int title_bar = 15;       
-                uint32_t frame_color = 0x888888; 
+                gui_tasks++;
+                if (task_list[i].has_drawn) needs_update = 1;
+            }
+        }
 
-                // --- LAYER 1: THE HOLLOW FRAME (Window Area) ---
-                // X and Y now define the absolute top-left of the entire framed window
-                
-                // Top (Title Bar)
-                VESA_draw_rect(task_list[i].win_x, task_list[i].win_y, task_list[i].win_w + (border * 2), title_bar, frame_color);
-                // Bottom
-                VESA_draw_rect(task_list[i].win_x, task_list[i].win_y + title_bar + task_list[i].win_h, task_list[i].win_w + (border * 2), border, frame_color);
-                // Left
-                VESA_draw_rect(task_list[i].win_x, task_list[i].win_y + title_bar, border, task_list[i].win_h, frame_color);
-                // Right
-                VESA_draw_rect(task_list[i].win_x + border + task_list[i].win_w, task_list[i].win_y + title_bar, border, task_list[i].win_h, frame_color);
+        if (gui_tasks != last_gui_count) {
+            needs_update = 1;
+            last_gui_count = gui_tasks;
+            refresh_tiling_layout();
+        }
 
-                // --- LAYER 2: THE WINDOW CONTENT (Client Area) ---
-                for (int y = 0; y < task_list[i].win_h; y++) {
-                    for (int x = 0; x < task_list[i].win_w; x++) {
-                        
-                        // We offset the internal buffer so it sits safely INSIDE the borders and BELOW the title bar!
-                        int real_x = task_list[i].win_x + border + x;
-                        int real_y = task_list[i].win_y + title_bar + y;
-                        
-                        uint32_t pixel = task_list[i].window_buffer[(y * task_list[i].win_w) + x];
-                        VESA_draw_pixel(real_x, real_y, pixel); 
+        if (!needs_update) { sleep(10); continue; }
+
+        if (gui_tasks == 0) {
+            VESA_draw_rect(0, 0, sw, sh, 0x000033);
+        } else {
+            int tile_width = sw / gui_tasks;
+            int current_tile = 0;
+
+            for (int i = 0; i < MAX_TASKS; i++) {
+                if (task_list[i].state != 0 && task_list[i].has_window) {
+                    int start_x = current_tile * tile_width;
+
+                    if (current_tile > 0) {
+                        // Draw the 2px grey divider directly into b_buffer
+                        for (uint32_t y = 0; y < sh; y++) {
+                            b_buffer[y * sw + start_x]     = 0x888888;
+                            b_buffer[y * sw + start_x + 1] = 0x888888;
+                        }
+                        start_x += 2; // shift the blit start past the divider
                     }
-                }
 
-                // --- LAYER 3: THE TITLE TEXT ---
-                int title_x = task_list[i].win_x + 5;
-                // 4 pixels of padding pushes the text perfectly into the middle of the 15px title bar
-                int title_y = task_list[i].win_y + 4; 
-                char* name = (char*)task_list[i].name;
-                
-                while (*name) {
-                    VESA_draw_char(*name, title_x, title_y, 0xFFFFFF); 
-                    title_x += 8;
-                    name++; 
+                    // Blit this tile's visible rows.
+                    // src row starts at column 0 of the window_buffer
+                    // (the buffer is full-screen width, so stride is sw).
+                    // We copy exactly (tile_width - divider) pixels per row,
+                    // which is also exactly the space we have in b_buffer.
+                    int copy_w = tile_width - (current_tile > 0 ? 2 : 0);
+                    for (uint32_t y = 0; y < sh; y++) {
+                        uint32_t* src = &task_list[i].window_buffer[y * sw];
+                        uint32_t* dst = &b_buffer[y * sw + start_x];
+                        kmemcpy32(dst, src, copy_w);
+                    }
+
+                    task_list[i].has_drawn = 0;
+                    current_tile++;
                 }
             }
         }
+vesa_dirty = 1;  // back_buffer now has fresh compositor output
         VESA_flip();
-        vesa_updating = 0; // UNLOCK
-        
-        // Let the compositor run at roughly 30 FPS (~33ms)
-        // Adjust this depending on your timer frequency!
-        sleep(30); 
+        sleep(10);
     }
 }

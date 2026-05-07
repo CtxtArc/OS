@@ -197,7 +197,7 @@ char arg_str[32]; // Fixed: Declared here for general use
             emit_load(0xBB, arg_str, out_buf, pos);
             out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
         } else {
-            *pos += 14;
+            *pos += 12;
         }
     }    // --- RECT: 6 Loads (36) + INT (2) = 38 bytes ---
     else if (kstrcmp(cmd, "RECT") == 0) {

@@ -6,7 +6,7 @@ static int head = 0;
 static int tail = 0;
 extern int keyboard_focus_tid;
 extern int current_task_idx;
-extern struct task task_list[];
+extern volatile struct task task_list[MAX_TASKS];
 // This is what the Linker is looking for!
 int has_key_in_buffer() {
     return head != tail;

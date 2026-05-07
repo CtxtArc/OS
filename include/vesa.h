@@ -71,4 +71,6 @@ void VESA_set_fps(uint32_t fps);
 void VESA_print_at(const char* str, int x, int y, uint32_t color);
 void VESA_clear_region(int x, int y, int w, int h);
 void kputc(char c);
+
+uint32_t* VESA_get_back_buffer();
 #endif // !VESA_H
