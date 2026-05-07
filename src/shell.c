@@ -46,8 +46,9 @@ void execute_command(char* input) {
 
     vesa_updating = 1;
 
+    // --- SYSTEM & INFO ---
     if (kstrcmp(input, "HELP") == 0) {
-        VESA_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL SLEEP RUN TOP UPTIME REBOOT CRASH ECHO SET_FPS TIMER GAME HEXDUMP WRITE COMPILE\n", COLOR_WHITE);
+        VESA_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL SLEEP RUN TOP UPTIME REBOOT CRASH ECHO SET_FPS TIMER GAME HEXDUMP WRITE COMPILE KED\n", COLOR_WHITE);
     }
     else if (kstrcmp(input, "PS") == 0) {
         VESA_print("TID    NAME          STATE\n", COLOR_CYAN);
@@ -74,6 +75,22 @@ void execute_command(char* input) {
         VESA_print(buf, COLOR_CYAN);
         VESA_print("s\n", COLOR_WHITE);
     }
+    else if (kstrcmp(input, "CLEAR") == 0) {
+        VESA_clear_buffer_only();
+        task_list[0].cursor_x = 0;
+        task_list[0].cursor_y = 0;
+    }
+    else if (kstrcmp(input, "ECHO") == 0) {
+        if (arg) { VESA_print(arg, COLOR_WHITE); VESA_print("\n", COLOR_WHITE); }
+    }
+    else if (kstrcmp(input, "SLEEP") == 0) {
+        if (arg) {
+            uint32_t ms = katoi(arg);
+            sleep(ms);
+        }
+    }
+
+    // --- FILESYSTEM ---
     else if (kstrcmp(input, "LS") == 0) {
         if (arg && kstrlen(arg) > 0) {
             uint32_t target = fat_get_cluster_from_path(arg);
@@ -130,6 +147,10 @@ void execute_command(char* input) {
             } else VESA_print("File not found.\n", COLOR_RED);
         }
     }
+    else if (kstrcmp(input, "HEXDUMP") == 0) {
+        if (arg) fat_hexdump_file(arg);
+        else VESA_print("Usage: HEXDUMP <filename>\n", COLOR_RED);
+    }
     else if (kstrcmp(input, "WRITE") == 0) {
         if (arg && kstrlen(arg) > 0) {
             char* filename = arg;
@@ -145,6 +166,41 @@ void execute_command(char* input) {
             else VESA_print("Usage: WRITE <file> <text>\n", COLOR_RED);
         }
     }
+
+    // --- NATIVE APPS & TASKS ---
+    else if (kstrcmp(input, "KED") == 0) {
+        if (arg) {
+            extern void KED_init(const char* filename); // Prep KED with filename
+            extern void KED_task();                     // The actual infinite loop function
+
+            KED_init(arg);
+            int tid = spawn_task(KED_task, NULL, "KED");
+            task_create_window(tid, 0, 0, 0, 0);
+            VESA_print("Text Editor Spawned.\n", COLOR_GREEN);
+        } else {
+            VESA_print("Usage: KED <filename>\n", COLOR_RED);
+        }
+    }
+    else if (kstrcmp(input, "TOP") == 0) {
+        extern void run_top();
+        int tid = spawn_task(run_top, NULL, "TOP");
+        task_create_window(tid, 0, 0, 0, 0);
+        VESA_print("TOP Spawned.\n", COLOR_GREEN);
+    }
+    else if (kstrcmp(input, "GAME") == 0) {
+        extern void task_game();
+        int tid = spawn_task(task_game, NULL, "GAME");
+        task_create_window(tid, 0, 0, 0, 0);
+        VESA_print("Game Spawned.\n", COLOR_GREEN);
+    }
+    else if (kstrcmp(input, "TIMER") == 0) {
+        extern void task_timer();
+        spawn_task(task_timer, NULL, "TIMER"); 
+        // Note: Timer uses VESA_print_at (raw coordinates), so it doesn't need a window buffer!
+        VESA_print("Background Timer Spawned.\n", COLOR_GREEN);
+    }
+
+    // --- EXECUTION ---
     else if (kstrcmp(input, "RUN") == 0) {
         if (arg) {
             struct fat_dir_entry* entry = fat_search(arg);
@@ -173,14 +229,6 @@ void execute_command(char* input) {
             if (id == 0) VESA_print("Cannot kill Shell.\n", COLOR_RED);
             else { kill_task(id); VESA_print("Task killed.\n", COLOR_GREEN); }
         }
-    }
-    else if (kstrcmp(input, "CLEAR") == 0) {
-        VESA_clear_buffer_only();
-        task_list[0].cursor_x = 0;
-        task_list[0].cursor_y = 0;
-    }
-    else if (kstrcmp(input, "ECHO") == 0) {
-        if (arg) { VESA_print(arg, COLOR_WHITE); VESA_print("\n", COLOR_WHITE); }
     }
     else if (input[0] != '\0') {
         VESA_print("Unknown command: ", COLOR_RED);

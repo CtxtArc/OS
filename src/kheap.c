@@ -1,24 +1,25 @@
 #include "kheap.h"
 #include "lib.h"
 
+// Set the heap to 64MB so we can easily hold multiple 1024x768x4 window buffers
+#define HEAP_INITIAL_SIZE (64 * 1024 * 1024) 
+
 // The Linker provides this symbol
 extern uint32_t end; 
 uint32_t placement_address = (uint32_t)&end;
 
 header_t* heap_start = NULL;
 
-
 void init_kheap() {
-    uint32_t start_node = 0x800000;
-    // Total heap area: 16MB. 
-    // The data size of the first block is 16MB minus its own header.
-    uint32_t total_heap_size = 16 * 1024 * 1024; 
+    uint32_t start_node = 0x800000; // Heap starts at the 8MB mark in physical RAM
+    uint32_t total_heap_size = HEAP_INITIAL_SIZE; 
 
     heap_start = (header_t*)start_node;
     heap_start->size = total_heap_size - sizeof(header_t); 
     heap_start->is_free = 1;
     heap_start->next = NULL;
 }
+
 void kfree(void* ptr) {
     if (!ptr) return;
 
@@ -54,14 +55,12 @@ void kfree(void* ptr) {
     }
 
     // 4. COALESCE BACKWARD: Merge with previous if free
-    // This is the "magic" that turns tiny holes back into 13MB
+    // This is the "magic" that turns tiny holes back into a massive block
     if (prev_save && prev_save->is_free) {
         prev_save->size += sizeof(header_t) + target->size;
         prev_save->next = target->next;
     }
 }
-
-
 
 void* kmemcpy(void* dest, const void* src, uint32_t n) {
     __asm__ volatile (
@@ -75,6 +74,7 @@ void* kmemcpy(void* dest, const void* src, uint32_t n) {
     );
     return dest;
 }
+
 // Use this for Graphics (VESA_flip, VESA_scroll)
 void* kmemcpy32(void* dest, const void* src, uint32_t n) {
     __asm__ volatile (
@@ -84,19 +84,20 @@ void* kmemcpy32(void* dest, const void* src, uint32_t n) {
     );
     return dest;
 }
+
 void kheap_stats() {
     uint32_t free_mem = 0; 
     uint32_t used_mem = 0;
     uint32_t blocks = 0;
     
     header_t* curr = heap_start;
-    uint32_t heap_limit = (uint32_t)heap_start + 16 * 1024 * 1024; // 1MB limit
+    // Updated to use the HEAP_INITIAL_SIZE macro!
+    uint32_t heap_limit = (uint32_t)heap_start + HEAP_INITIAL_SIZE; 
     kprintf("Scanning Heap at 0x%x...\n", (uint32_t)heap_start);
 
     while (curr != NULL) {
         // --- THE SAFETY CHECK ---
-        // If curr is outside the 1MB pool, the list is broken. 
-        // Stop here instead of rebooting!
+        // If curr is outside the pool, the list is broken. 
         if ((uint32_t)curr < (uint32_t)heap_start || (uint32_t)curr >= heap_limit) {
             kprintf("Error: Heap linked-list corrupted at 0x%x\n", (uint32_t)curr);
             break;
@@ -136,8 +137,6 @@ void* kmalloc(uint32_t size) {
             // 2. THE HEALER SPLIT LOGIC
             // We only split if we have enough room for:
             // The requested data + current header + NEW header + at least 16 bytes of data.
-            // If the leftover is less than 16 bytes, we don't split; we just 
-            // give the user a slightly larger block to avoid "0-size" ghosts.
             uint32_t total_needed_to_split = size + sizeof(header_t) + 16;
 
             if (curr->size >= total_needed_to_split) {
@@ -158,8 +157,7 @@ void* kmalloc(uint32_t size) {
                 curr->next = next_block;
             } else {
                 // INTERNAL FRAGMENTATION:
-                // We don't split. curr->size remains larger than requested,
-                // which is fine! It prevents "B3 size 0" from ever existing.
+                // We don't split. curr->size remains larger than requested.
             }
             
             // 3. LOCK AND RETURN
@@ -190,6 +188,7 @@ void* kmalloc_a(uint32_t size) {
     
     return (void*)aligned_addr;
 }
+
 void* kmemset(void* dest, uint32_t val, uint32_t n) {
     __asm__ volatile (
         "rep stosl"
@@ -199,6 +198,7 @@ void* kmemset(void* dest, uint32_t val, uint32_t n) {
     );
     return dest;
 }
+
 void kheap_dump_map() {
     header_t* curr = heap_start;
     int i = 0;

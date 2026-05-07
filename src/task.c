@@ -15,7 +15,6 @@ int multitasking_enabled = 0;
 volatile struct task task_list[MAX_TASKS];
 int current_task_idx = 0;
 
-
 void shell_task() {
     char line[128];
     int idx = 0;
@@ -37,7 +36,7 @@ void shell_task() {
             if (idx > 0) execute_command(line);
             idx = 0;
             VESA_print("> ", COLOR_YELLOW);
-    task_list[0].has_drawn = 1;  // ensure compositor picks up the prompt too
+            task_list[0].has_drawn = 1;  
         }
         else if (c == '\b' && idx > 0) {
             idx--;
@@ -64,8 +63,11 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
             task_list[i].has_window = 0;
             task_list[i].window_buffer = NULL;
 
-            void* raw_stack = kmalloc(4096 + 0x1000);
+            // FIX #1: INCREASED STACK TO 16KB TO PREVENT REBOOTS!
+            uint32_t stack_size = 16384; 
+            void* raw_stack = kmalloc(stack_size + 0x1000);
             if (!raw_stack) return -1;
+            
             task_list[i].stack_ptr = raw_stack;
             task_list[i].code_ptr = code_ptr;
 
@@ -75,7 +77,8 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
                 aligned_stack += 0x1000;
             }
 
-            uint32_t* s_ptr = (uint32_t*)(aligned_stack + 4096);
+            // POINT TO THE NEW 16KB ROOF
+            uint32_t* s_ptr = (uint32_t*)(aligned_stack + stack_size);
             *--s_ptr = 0x10;
             uint32_t task_stack_top = (uint32_t)s_ptr;
             *--s_ptr = task_stack_top;
@@ -156,36 +159,12 @@ void init_multitasking() {
 }
 
 int get_current_task_id() { return current_task_idx; }
-
-int task_is_ready(int id) {
-    if (id < 0 || id >= MAX_TASKS) return 0;
-    return task_list[id].state == 1;
-}
-
-uint32_t task_get_esp(int id) {
-    if (id < 0 || id >= MAX_TASKS) return 0;
-    return task_list[id].esp;
-}
-
-char* task_get_name(int id) {
-    if (id < 0 || id >= MAX_TASKS) return "unused";
-    return (char*)task_list[id].name;
-}
-
-int task_get_state(int id) {
-    if (id < 0 || id >= MAX_TASKS) return -1;
-    return task_list[id].state;
-}
-
-int task_get_sleep_ticks(int id) {
-    if (id < 0 || id >= MAX_TASKS) return -1;
-    return task_list[id].sleep_ticks;
-}
-
-int task_get_total_ticks(int id) {
-    if (id < 0 || id >= MAX_TASKS) return -1;
-    return task_list[id].total_ticks;
-}
+int task_is_ready(int id) { return (id >= 0 && id < MAX_TASKS) ? (task_list[id].state == 1) : 0; }
+uint32_t task_get_esp(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].esp : 0; }
+char* task_get_name(int id) { return (id >= 0 && id < MAX_TASKS) ? (char*)task_list[id].name : "unused"; }
+int task_get_state(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].state : -1; }
+int task_get_sleep_ticks(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].sleep_ticks : -1; }
+int task_get_total_ticks(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].total_ticks : -1; }
 
 void task_timer() {
     uint32_t seconds = 0;
@@ -204,7 +183,7 @@ void task_game() {
     int previous_focus = keyboard_focus_tid;
     keyboard_focus_tid = current_task_idx;
 
-    while (has_key_in_buffer()) { get_key_from_buffer(); }
+    while (has_key_in_buffer()) get_key_from_buffer();
 
     vesa_updating = 1;
     VESA_clear();
@@ -256,7 +235,7 @@ void run_top() {
     int previous_focus = keyboard_focus_tid;
     keyboard_focus_tid = current_task_idx;
 
-    while (has_key_in_buffer()) { get_key_from_buffer(); }
+    while (has_key_in_buffer()) get_key_from_buffer();
     VESA_clear();
 
     while (1) {
@@ -324,33 +303,46 @@ void task_create_window(int tid, int x, int y, int w, int h) {
     struct multiboot_info* mbi = VESA_get_boot_info();
     uint32_t full_size = mbi->framebuffer_width * mbi->framebuffer_height;
 
-    task_list[tid].has_window  = 1;
-    task_list[tid].win_x       = x;
-    task_list[tid].win_y       = y;
-    task_list[tid].win_w       = w;
-    task_list[tid].win_h       = h;
-    task_list[tid].cursor_x    = 0;
-    task_list[tid].cursor_y    = 0;
+    task_list[tid].win_x = x;
+    task_list[tid].win_y = y;
+    
+    // SAFETY: Never allow a window width/height of 0. Default to screen size temporarily.
+    task_list[tid].win_w = (w == 0) ? mbi->framebuffer_width : w;
+    task_list[tid].win_h = (h == 0) ? mbi->framebuffer_height : h;
+    
+    task_list[tid].cursor_x = 0;
+    task_list[tid].cursor_y = 0;
 
     task_list[tid].window_buffer = (uint32_t*)kmalloc(full_size * 4);
-    if (task_list[tid].window_buffer) {
-        for (uint32_t p = 0; p < full_size; p++)
-            task_list[tid].window_buffer[p] = 0x222222;
+
+    if (task_list[tid].window_buffer == NULL) {
+        VESA_print("\n[OS] ERROR: Out of Memory for Task Window!\n", 0xFF0000);
+        task_list[tid].has_window = 0; 
+        return;
     }
+
+    task_list[tid].has_window = 1;
+    for (uint32_t p = 0; p < full_size; p++) {
+        task_list[tid].window_buffer[p] = 0x222222;
+    }
+    
+    // FIX: Force the tiling manager to split the screen RIGHT NOW, 
+    // before the new task has a chance to execute and draw out of bounds!
+    refresh_tiling_layout();
+    
     task_list[tid].has_drawn = 1;
 }
-
 void compositor_task() {
     struct multiboot_info* mbi = VESA_get_boot_info();
     uint32_t sw = mbi->framebuffer_width;
     uint32_t sh = mbi->framebuffer_height;
     uint32_t* b_buffer = VESA_get_back_buffer();
-    int last_gui_count = 0;
+    int last_gui_count = -1; 
 
     while(1) {
         if (vesa_updating) { yield(); continue; }
 
-        int gui_tasks  = 0;
+        int gui_tasks = 0;
         int needs_update = 0;
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_list[i].state != 0 && task_list[i].has_window) {
@@ -365,36 +357,45 @@ void compositor_task() {
             refresh_tiling_layout();
         }
 
-        if (!needs_update) { sleep(10); continue; }
+        if (!needs_update) { 
+            sleep(10); 
+            continue; 
+        }
 
         if (gui_tasks == 0) {
             VESA_draw_rect(0, 0, sw, sh, 0x000033);
         } else {
+            // WIPE back buffer background to cleanly reset edges
+            for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
+
             int tile_width = sw / gui_tasks;
             int current_tile = 0;
 
             for (int i = 0; i < MAX_TASKS; i++) {
-                if (task_list[i].state != 0 && task_list[i].has_window) {
+                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer != NULL) {
                     int start_x = current_tile * tile_width;
 
                     if (current_tile > 0) {
-                        // Draw the 2px grey divider directly into b_buffer
+                        // FIX #2: WHITE DIVIDER. Draws strictly at the tile barrier!
                         for (uint32_t y = 0; y < sh; y++) {
-                            b_buffer[y * sw + start_x]     = 0x888888;
-                            b_buffer[y * sw + start_x + 1] = 0x888888;
+                            b_buffer[y * sw + start_x]     = 0xFFFFFF; 
+                            b_buffer[y * sw + start_x + 1] = 0xFFFFFF;
                         }
-                        start_x += 2; // shift the blit start past the divider
                     }
 
-                    // Blit this tile's visible rows.
-                    // src row starts at column 0 of the window_buffer
-                    // (the buffer is full-screen width, so stride is sw).
-                    // We copy exactly (tile_width - divider) pixels per row,
-                    // which is also exactly the space we have in b_buffer.
-                    int copy_w = tile_width - (current_tile > 0 ? 2 : 0);
+                    // Properly account for the divider space
+                    int dst_x = (current_tile > 0) ? start_x + 2 : start_x;
+                    int copy_w = tile_width - ((current_tile > 0) ? 2 : 0);
+
+                    // Perfectly stretch the last tile to exactly hit the right wall
+                    if (current_tile == gui_tasks - 1) {
+                        copy_w = sw - dst_x;
+                    }
+
+                    // Blit the tile data perfectly aligned
                     for (uint32_t y = 0; y < sh; y++) {
                         uint32_t* src = &task_list[i].window_buffer[y * sw];
-                        uint32_t* dst = &b_buffer[y * sw + start_x];
+                        uint32_t* dst = &b_buffer[y * sw + dst_x];
                         kmemcpy32(dst, src, copy_w);
                     }
 
@@ -403,7 +404,8 @@ void compositor_task() {
                 }
             }
         }
-vesa_dirty = 1;  // back_buffer now has fresh compositor output
+        
+        vesa_dirty = 1; 
         VESA_flip();
         sleep(10);
     }

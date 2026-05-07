@@ -5,78 +5,102 @@
 #include "lib.h"
 #include "task.h"
 
-extern int vesa_updating;
 extern int keyboard_focus_tid;
 extern uint32_t system_ticks;
 extern int current_task_idx;
+extern volatile struct task task_list[]; 
 
-void run_editor(const char* filename) {
-    // 1. Setup focus and memory
-    int previous_focus = keyboard_focus_tid;
+static char ked_target_file[16];
+
+void KED_init(const char* filename) {
+    kstrncpy(ked_target_file, filename, 15);
+    ked_target_file[15] = '\0';
+}
+
+void KED_task() {
     keyboard_focus_tid = current_task_idx;
     
-    // Allocate 4KB for the editor buffer
     char* text_buffer = (char*)kmalloc(4096);
-    if (!text_buffer) return;
+    if (!text_buffer) {
+        // Safe exit via Syscall 4 (EXIT)
+        __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
+        while(1) yield();
+    }
+    
+    // Fill the 4KB buffer with null terminators
     kmemset(text_buffer, 0, 4096 / 4);
 
-    // 2. Load existing file if it exists
-    struct fat_dir_entry* entry = fat_search(filename);
+    struct fat_dir_entry* entry = fat_search(ked_target_file);
     uint32_t cursor_pos = 0;
+    
     if (entry) {
         char* loaded_data = fat_load_file(entry);
         if (loaded_data) {
+            // Leave at least 1 byte for the null terminator
             uint32_t to_copy = (entry->size > 4095) ? 4095 : entry->size;
             kmemcpy(text_buffer, loaded_data, to_copy);
             cursor_pos = to_copy;
             kfree(loaded_data);
         }
     } else {
-        // If file doesn't exist, we'll create it on SAVE
-        fat_touch(filename);
+        fat_touch(ked_target_file);
     }
 
-    VESA_clear();
+    // --- ANTI-BLINK VARIABLES ---
+    int needs_redraw = 1;
+    int last_cursor_state = -1;
 
     while (1) {
-        vesa_updating = 1;
-        VESA_clear_buffer_only();
-        
-        // Header
-        kprintf_unsync("KED Editor - Editing: %s\n", filename);
-        kprintf_unsync("Ctrl+S: Save & Exit | Ctrl+Q: Cancel\n");
-        kprintf_unsync("-------------------------------------------\n");
-        
-        // Render the buffer text
-        kprintf_unsync("%s", text_buffer);
-        
-        // Simple visual cursor (a flashing underscore or pipe)
-        if ((system_ticks / 20) % 2 == 0) kprintf_unsync("_");
+        // 1. Check if the cursor needs to blink
+        int current_cursor_state = (system_ticks / 20) % 2;
+        if (current_cursor_state != last_cursor_state) {
+            needs_redraw = 1;
+            last_cursor_state = current_cursor_state;
+        }
 
-        vesa_updating = 0;
-        VESA_flip();
+        // 2. ONLY draw if something actually changed!
+        if (needs_redraw) {
+            VESA_clear_buffer_only();
+            
+            // Use VESA_print_unsync directly to avoid vsprintf buffer overflows!
+            VESA_print_unsync("KED Editor - Editing: ", 0xFFFFFF);
+            VESA_print_unsync(ked_target_file, 0x00FFFF);
+            VESA_print_unsync("\nCtrl+S: Save & Exit | Ctrl+Q: Cancel\n", 0xAAAAAA);
+            VESA_print_unsync("-------------------------------------------\n", 0x888888);
+            
+            // Safely print the massive buffer directly to the screen
+            VESA_print_unsync(text_buffer, 0xFFFFFF);
+            
+            if (current_cursor_state == 0) {
+                VESA_print_unsync("_", 0xFFFFFF);
+            }
+
+            task_list[current_task_idx].has_drawn = 1;
+            needs_redraw = 0; // Reset flag so we don't draw next frame
+        }
 
         // 3. Handle Input
         if (has_key_in_buffer()) {
             char c = get_key_from_buffer();
+            
+            needs_redraw = 1; // A key was pressed! Force a redraw!
 
-            if (c == 17) { // Ctrl + Q
+            if (c == 17) { // Ctrl + Q (Cancel)
                 break;
             }
-            if (c == 19) { // Ctrl+ S
-                fat_write_file(filename, text_buffer);
-                break;
+            if (c == 19) { // Ctrl + S (Save)
+                fat_write_file(ked_target_file, text_buffer);
+                break; 
             }
-            if (c == 16) { 
+            if (c == 16) { // Ctrl + P (Paste test block)
                 uint32_t paste_size = 512;
-                // Check if we have room in the 4096 byte buffer
                 if (cursor_pos + paste_size < 4094) {
                     for (uint32_t i = 0; i < paste_size; i++) {
                         text_buffer[cursor_pos++] = 'H';
                     }
-                    text_buffer[cursor_pos] = '\0'; // Ensure null termination
+                    text_buffer[cursor_pos] = '\0';
                 }
-                continue; // Skip the standard character processing
+                continue;
             }
             if (c == '\b' && cursor_pos > 0) {
                 text_buffer[--cursor_pos] = '\0';
@@ -88,10 +112,19 @@ void run_editor(const char* filename) {
                 }
             }
         }
-        yield(); // Let the Spinner keep spinning lol!
+        
+        yield(); 
     }
 
+    // Free the heap data before exiting
     kfree(text_buffer);
-    keyboard_focus_tid = previous_focus;
-    VESA_clear();
+    
+    // Return keyboard focus to the Shell
+    keyboard_focus_tid = 0; 
+    
+    // Call Syscall 4 (EXIT) to let the Kernel safely reap the task
+    __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
+    
+    // Wait for the scheduler to swap us out permanently
+    while(1) yield(); 
 }
