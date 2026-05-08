@@ -25,21 +25,7 @@ char *exception_messages[] = {
     "Stack Fault", "General Protection Fault", "Page Fault", "Unknown Interrupt"
 };
 
-void isr_handler(struct registers *r) {
-    VESA_clear();
-    for(int i = 0; i < 80 * 25; i++) {
-        ((uint16_t*)0xB8000)[i] = (uint16_t)' ' | (uint16_t)0x1F << 8;
-    }
-    task_list[0].cursor_x = 0;
-    task_list[0].cursor_y = 0;
 
-    kprintf_color(COLOR_WHITE, "--- KERNEL PANIC ---\n");
-    kprintf_color(COLOR_WHITE, "Interrupt: %d (%s)\n", r->int_no, exception_messages[r->int_no]);
-    kprintf_color(COLOR_WHITE, "EIP: %x  EAX: %x  EBX: %x\n", r->eip, r->eax, r->ebx);
-    kprintf_color(COLOR_WHITE, "ECX: %x  EDX: %x\n", r->ecx, r->edx);
-
-    while(1) __asm__("hlt");
-}
 
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_low  = (base & 0xFFFF);
@@ -61,26 +47,121 @@ void pic_remap() {
     outb(0x21, 0xFC); outb(0xA1, 0xFF);
 }
 
+void isr_handler(struct registers *r) {
+    // 1. Lock down the system
+    __asm__ volatile("cli");
+
+    // 2. Clear the screen to pure Red for a Kernel Panic!
+    VESA_draw_rect(0, 0, 1024, 768, 0xAA0000); 
+    
+    task_list[0].cursor_x = 10;
+    task_list[0].cursor_y = 10;
+
+    VESA_print("===================================================\n", 0xFFFFFF);
+    VESA_print("                 KERNEL PANIC                      \n", 0xFFFFFF);
+    VESA_print("===================================================\n\n", 0xFFFFFF);
+
+    // --- THE EXCEPTION DECODER ---
+    if (r->int_no == 14) {
+        uint32_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2)); // Read the bad address
+
+        VESA_print("EXCEPTION: PAGE FAULT (INT 14)\n\n", 0xFFFFFF);
+        VESA_print("A task tried to access unmapped or protected memory.\n\n", 0xDDDDDD);
+        
+        char buf[16];
+        VESA_print("Faulting Address (CR2): 0x", 0xFFFFFF);
+        itoa(cr2, buf, 16);
+        VESA_print(buf, 0x00FFFF);
+        VESA_print("\n", 0xFFFFFF);
+    } else {
+        VESA_print("EXCEPTION: ", 0xFFFFFF);
+        if (r->int_no < 16) VESA_print(exception_messages[r->int_no], 0xFFFFFF);
+        else VESA_print("Unknown", 0xFFFFFF);
+        VESA_print("\n", 0xFFFFFF);
+    }
+    // ------------------------------
+
+    // Print register state to help debugging
+    char hex_buf[16];
+    VESA_print("\nEIP: 0x", 0xAAAAAA); itoa(r->eip, hex_buf, 16); VESA_print(hex_buf, 0xFFFFFF);
+    VESA_print("  EAX: 0x", 0xAAAAAA); itoa(r->eax, hex_buf, 16); VESA_print(hex_buf, 0xFFFFFF);
+    VESA_print("  EBX: 0x", 0xAAAAAA); itoa(r->ebx, hex_buf, 16); VESA_print(hex_buf, 0xFFFFFF);
+
+    VESA_flip(); // Force the red screen to draw!
+
+    // --- THE GRACEFUL RECOVERY LOGIC ---
+    int id = current_task_idx;
+    
+    // We can only recover if an APP crashed (ID > 0). 
+    // If the core Shell (Task 0) or Kernel initialization crashes, we MUST halt.
+    if (id > 0 && task_list[id].state != 0) {
+        
+        sleep(3000); // Pause for 3 seconds so you can read the red screen!
+        
+        // 1. Mark task as dead and free its window buffer
+        task_list[id].state = 0; 
+        if (task_list[id].window_buffer) {
+            kfree(task_list[id].window_buffer);
+            task_list[id].window_buffer = NULL;
+        }
+        
+        // Force the Compositor to recalculate the remaining tiles
+        refresh_tiling_layout();
+
+        // 2. Reassign keyboard focus if the dying task had it
+        if (keyboard_focus_tid == id) {
+            int next = (id + 1) % MAX_TASKS;
+            while (next != id) {
+                if (task_list[next].state != 0 && task_list[next].has_window) {
+                    keyboard_focus_tid = next;
+                    task_list[next].has_drawn = 1; // Tell the new window to turn Cyan!
+                    break;
+                }
+                next = (next + 1) % MAX_TASKS;
+            }
+        }
+
+        // 3. HIJACK THE CPU!
+        // We overwrite the Return Instruction Pointer on the stack. 
+        // When our assembly stub calls `iret`, it will unknowingly boot into the Idle Task instead of the crashed app!
+        r->eip = (uint32_t)idle_task_code;
+        return; 
+        
+    } else {
+        // Critical Kernel Panic! (Task 0 or pre-multitasking crash)
+        VESA_print("\n\nCRITICAL KERNEL CRASH. System Halted.", 0xFF0000);
+        VESA_flip();
+        while(1) __asm__("hlt");
+    }
+}
+
 void idt_init() {
     idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
     idtp.base  = (uint32_t)&idt;
 
     for(int i = 0; i < 256; i++) idt_set_gate(i, 0, 0, 0);
+    
+    // System calls
     idt_set_gate(128, (uint32_t)isr128_stub, 0x08, 0x8E);
 
+    // Hardware IRQs
     extern void irq0_handler();
-    idt_set_gate(32, (uint32_t)irq0_handler, 0x08, 0x8E);
-    idt_set_gate(0,  (uint32_t)isr0,         0x08, 0x8E);
-
-    extern void isr13();
-    idt_set_gate(13, (uint32_t)isr13, 0x08, 0x8E);
-
     extern void irq1_handler();
+    idt_set_gate(32, (uint32_t)irq0_handler, 0x08, 0x8E);
     idt_set_gate(33, (uint32_t)irq1_handler, 0x08, 0x8E);
+
+    // CPU Exceptions
+    extern void isr0();
+    extern void isr13();
+    extern void isr14(); // <--- WE MUST DECLARE THIS
+    
+    idt_set_gate(0,  (uint32_t)isr0,  0x08, 0x8E);
+    idt_set_gate(13, (uint32_t)isr13, 0x08, 0x8E);
+    idt_set_gate(14, (uint32_t)isr14, 0x08, 0x8E); // <--- HOOK IT UP!
 
     __asm__ volatile("lidt (%0)" : : "r" (&idtp));
 }
-
 void timer_init(uint32_t frequency) {
     if (frequency == 0) frequency = 1;
     timer_frequency = frequency;

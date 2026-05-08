@@ -28,6 +28,7 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
     pmm_init(ram_kb * 1024, (uint32_t)&end); // PMM first
     paging_init(mbi);                        // Paging second
     init_kheap();                            // Heap third
+  
 
     // 3. Hardware / Graphics
     VESA_init(mbi);
@@ -35,7 +36,7 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
 
     // 4. Filesystem & Tasks
     fat_init();
-run_startup_tests();
+    run_startup_tests();
     init_multitasking(); 
 
     // 5. Final output and interrupts

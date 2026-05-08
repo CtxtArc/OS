@@ -51,6 +51,15 @@ void KED_task() {
     int last_cursor_state = -1;
 
     while (1) {
+        // --- OOM SAFETY CHECK ---
+        // If the OS failed to allocate a window buffer due to low memory, 
+        // abort the application so it doesn't fight the Compositor!
+        if (task_list[current_task_idx].has_window == 0) {
+            __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
+            while(1) yield();
+        }
+        // ------------------------
+
         // SAFETY: Wait for the compositor to give us a real width
         if (task_list[current_task_idx].win_w == 0) {
             yield();
