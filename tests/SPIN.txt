@@ -1,10 +1,7 @@
 WINDOW 0 0 100 100
 SET frame 0
-
 LABEL loop
-    # Atomic Update: Clear the 8x8 character area with the background color (0x222222)
-    RECT 49 49 10 10 0x222222
-    
+    CLEAR
     CMP frame 0
     JE draw_pipe
     CMP frame 1
@@ -14,27 +11,27 @@ LABEL loop
     CMP frame 3
     JE draw_bslash
     
-    # Reset sequence
+    # If frame > 3, reset it
     SET frame 0
     GOTO loop
 
 LABEL draw_pipe
     PRINT "|" 50 50 0x00FF00
-    GOTO next_frame
+    GOTO next
 
 LABEL draw_slash
     PRINT "/" 50 50 0x00FF00
-    GOTO next_frame
+    GOTO next
 
 LABEL draw_dash
     PRINT "-" 50 50 0x00FF00
-    GOTO next_frame
+    GOTO next
 
 LABEL draw_bslash
     PRINT "\\" 50 50 0x00FF00
-    GOTO next_frame
+    GOTO next
 
-LABEL next_frame
+LABEL next
     ADD frame 1
     SLEEP 100
     GOTO loop

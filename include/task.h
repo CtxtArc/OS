@@ -6,7 +6,9 @@
 #define STACK_SIZE 4096
 #define TASK_KBD_BUF_SIZE 64
 #define WIN_BORDER 2
-
+#define ERR_TASK_TABLE_FULL   -1
+#define ERR_TASK_STACK_OOM    -2
+#define ERR_TASK_INVALID_EP   -3
 struct task {
     uint32_t esp;
     uint32_t state; // 0 = empty, 1 = ready, 2 = sleep, 3 = blocked 

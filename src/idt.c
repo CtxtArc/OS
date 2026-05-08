@@ -379,38 +379,36 @@ void syscall_handler(struct registers *regs) {
     int id = current_task_idx;
     int border = WIN_BORDER;
 
-  if (regs->eax == 1) { // DRAW_CHAR
-    char c    = (char)regs->ebx;
-    int x     = regs->ecx + border;
-    int y     = regs->edx + border;
+   if (regs->eax == 1) { // DRAW_CHAR
+    char c = (char)regs->ebx;
+    int x = regs->ecx + border; 
+    int y = regs->edx + border;
 
     if (task_list[id].has_window && task_list[id].window_buffer) {
         extern uint8_t font8x8_basic[128][8];
-        uint8_t* glyph = font8x8_basic[(int)c];
+        uint8_t* glyph = font8x8_basic[(unsigned char)c];
         
         for (int row = 0; row < 8; row++) {
             for (int col = 0; col < 8; col++) {
-                // Check if the specific pixel in the font glyph is active
+                // Remove redundant nested checks to increase speed
                 if (glyph[row] & (1 << (7 - col))) {
                     int draw_x = x + col;
                     int draw_y = y + row;
 
-                    if (draw_x >= 0 && draw_x < task_list[id].win_w && draw_y >= 0 && draw_y < task_list[id].win_h) {
-    // Check if the font bit is 1
-    if (glyph[row] & (1 << (7 - col))) {
-        task_list[id].window_buffer[(draw_y * sw) + draw_x] = 0xFFFFFF; // White text
-    }
-    // DO NOT ADD AN ELSE. If it's 0, we don't touch the pixel.
-}
+                    // Bounds check against the task's window dimensions
+                    if (draw_x >= 0 && draw_x < task_list[id].win_w && 
+                        draw_y >= 0 && draw_y < task_list[id].win_h) {
+                        
+                        // Use sw (physical screen width) as the stride
+                        task_list[id].window_buffer[(draw_y * sw) + draw_x] = 0xFFFFFF;
+                    }
                 }
-                // We removed the 'else'—if the bit is 0, we simply don't touch the buffer,
-                // leaving the background blue (or whatever was there before).
             }
         }
+        // Immediately notify compositor of the change
         mark_task_dirty(id, x, y, 8, 8);
     }
-}  
-  else if (regs->eax == 2) { // GET_TICKS
+}  else if (regs->eax == 2) { // GET_TICKS
         regs->eax = system_ticks;
     }
     else if (regs->eax == 3) { // SLEEP(ms)
@@ -512,26 +510,41 @@ void syscall_handler(struct registers *regs) {
         mark_task_dirty(id, 0, 0, sw, sh);
     }
 else if (regs->eax == 9) {
-    uint32_t offset = regs->ebx; // This is 3000, 3004, etc.
-    
-    // Calculate the actual physical address in RAM
-    // Code and Variables both live inside task_list[id].code_ptr
+    uint32_t offset = regs->ebx;
     uint32_t* var_ptr = (uint32_t*)((uint32_t)task_list[id].code_ptr + offset);
-    uint32_t actual_val = *var_ptr; // Read the actual number!
+    uint32_t actual_val = *var_ptr;
 
     char buf[16];
     itoa(actual_val, buf, 10);
     
     if (task_list[id].has_window && task_list[id].window_buffer) {
-        int x = regs->ecx; int y = regs->edx;
+        int x = regs->ecx + border; 
+        int y = regs->edx + border;
         uint32_t color = regs->edi;
+
         for (int i = 0; buf[i] != '\0'; i++) {
-            VESA_draw_char(buf[i], x + (i * 8), y, color); 
+            // Re-use the logic from DRAW_CHAR to draw into the window buffer safely
+            extern uint8_t font8x8_basic[128][8];
+            uint8_t* glyph = font8x8_basic[(unsigned char)buf[i]];
+            int cur_x = x + (i * 8);
+
+            for (int row = 0; row < 8; row++) {
+                for (int col = 0; col < 8; col++) {
+                    if (glyph[row] & (1 << (7 - col))) {
+                        int dx = cur_x + col;
+                        int dy = y + row;
+                        if (dx >= 0 && dx < task_list[id].win_w && 
+                            dy >= 0 && dy < task_list[id].win_h) {
+                            task_list[id].window_buffer[(dy * sw) + dx] = color;
+                        }
+                    }
+                }
+            }
         }
         mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
     }
 }
-    else if (regs->eax == 10) { // INPUT (Get Key)
+  else if (regs->eax == 10) { // INPUT (Get Key)
         volatile struct task* me = &task_list[id];
         
         // Check our task's specific keyboard buffer

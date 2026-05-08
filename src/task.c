@@ -71,8 +71,12 @@ void shell_task() {
 }
 
 int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
+    // Check if the entry point is even valid
+    if (!entry_point) return ERR_TASK_INVALID_EP;
+
     for (int i = 1; i < MAX_TASKS; i++) {
         if (task_list[i].state == 0) {
+            // Found a slot, start initialization
             kstrncpy((char*)task_list[i].name, name, 15);
             task_list[i].name[15] = '\0';
             task_list[i].total_ticks = 0;
@@ -85,7 +89,9 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
 
             uint32_t stack_size = 16384; 
             void* raw_stack = kmalloc(stack_size + 0x1000);
-            if (!raw_stack) return -1;
+            
+            // ERROR: Memory allocation failed
+            if (!raw_stack) return ERR_TASK_STACK_OOM;
             
             task_list[i].stack_ptr = raw_stack;
             task_list[i].code_ptr = code_ptr;
@@ -110,12 +116,13 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
 
             task_list[i].esp = (uint32_t)s_ptr;
             task_list[i].state = 1;
-            return i;
+            return i; // Success
         }
     }
-    return -1;
-}
 
+    // ERROR: No slot found after checking all MAX_TASKS
+    return ERR_TASK_TABLE_FULL;
+}
 uint32_t task_stacks[MAX_TASKS][1024];
 
 void yield() {

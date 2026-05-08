@@ -218,13 +218,28 @@ void execute_command(char* input) {
                     kmemcpy((void*)aligned_code, file_data, size);
                     kfree(file_data);
                     int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
+                    if (tid >= 0) {
                     task_create_window(tid, 0, 0, 0, 0);
-                    VESA_print("Task Spawned.\n", COLOR_GREEN);
+                    VESA_print("Task Spawned successfully.\n", COLOR_GREEN);
+                } 
+                else if (tid == ERR_TASK_TABLE_FULL) {
+                    VESA_print("Spawn Error: Task table is full (MAX_TASKS reached).\n", COLOR_RED);
+                    kfree(raw_code);
+                } 
+                else if (tid == ERR_TASK_STACK_OOM) {
+                    VESA_print("Spawn Error: Not enough memory for task stack.\n", COLOR_RED);
+                    kfree(raw_code);
+                }
+                else {
+                    VESA_print("Spawn Error: Unknown failure.\n", COLOR_RED);
+                    kfree(raw_code);
+                }
                 }
             } else VESA_print("File not found.\n", COLOR_RED);
         }
     }
     else if (kstrcmp(input, "COMPILE") == 0) {
+
         if (arg) shell_compile(arg);
         else VESA_print("Usage: COMPILE <file.txt>\n", COLOR_RED);
     }
@@ -257,7 +272,6 @@ void shell_compile(const char* arg) {
 
     label_count = 0;
     rt_var_count = 0;
-
     for (int pass = 1; pass <= 2; pass++) {
         uint32_t current_pos = 0;
         uint32_t binary_pos = 0;
@@ -265,7 +279,7 @@ void shell_compile(const char* arg) {
         while (current_pos < file->size) {
             char temp_line[128];
             uint32_t i = 0;
-
+if (pass == 2) label_count = 0;
             while (current_pos < file->size && source_buf[current_pos] != '\n' && i < 127) {
                 temp_line[i++] = source_buf[current_pos++];
             }
