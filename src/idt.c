@@ -143,6 +143,18 @@ void keyboard_handler(struct registers *regs) {
     else if (scancode == 0x2A || scancode == 0x36)      { shift_state = 1; }
     else if (scancode == 0xAA || scancode == 0xB6)      { shift_state = 0; }
     else if (scancode == 0x3B)                          { keyboard_focus_tid = 0; }
+    else if (scancode == 0x0F && ctrl_state) { 
+        int start = keyboard_focus_tid;
+        int next = (start + 1) % MAX_TASKS;
+        
+        while (next != start) {
+            if (task_list[next].state != 0 && task_list[next].has_window) {
+                keyboard_focus_tid = next;
+                break;
+            }
+            next = (next + 1) % MAX_TASKS;
+        }
+    }
     else if (!(scancode & 0x80)) {
         char c = scancode_to_ascii(scancode, shift_state);
         if (c != 0) {

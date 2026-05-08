@@ -406,6 +406,16 @@ void compositor_task() {
                         uint32_t* dst = &b_buffer[y * sw + dst_x];
                         kmemcpy32(dst, src, copy_w);
                     }
+                    // --- THE FIX: VISUAL FOCUS INDICATOR ---
+                    // If this tile is the one receiving keyboard input, 
+                    // draw a 4-pixel thick Bright Yellow bar at the top!
+                    if (i == keyboard_focus_tid) {
+                        for (uint32_t y = 0; y < 4; y++) {
+                            for (int ix = 0; ix < copy_w; ix++) {
+                                b_buffer[y * sw + dst_x + ix] = 0xFFFF00; 
+                            }
+                        }
+                    }
 
                     task_list[i].has_drawn = 0;
                     current_tile++;

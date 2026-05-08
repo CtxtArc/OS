@@ -45,6 +45,7 @@ char scancode_to_ascii(uint8_t scancode, int shift) {
         case 0x35: return shift ? '?' : '/';
         case 0x1C: return '\n'; case 0x39: return ' '; 
         case 0x0E: return '\b'; default: return 0;
+        case 0x0F: return '\t';
     }
 }
 
