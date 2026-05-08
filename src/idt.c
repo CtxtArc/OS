@@ -143,23 +143,45 @@ void keyboard_handler(struct registers *regs) {
     else if (scancode == 0x2A || scancode == 0x36)      { shift_state = 1; }
     else if (scancode == 0xAA || scancode == 0xB6)      { shift_state = 0; }
     else if (scancode == 0x3B)                          { keyboard_focus_tid = 0; }
+    else if (scancode == 0x38)                          { alt_state = 1; }
+    else if (scancode == 0xB8)                          { alt_state = 0; }
+    
+    // --- HOTKEY: ALT + ENTER (Spawn Terminal) ---
+    else if (scancode == 0x1C && alt_state) { 
+        extern int pending_shell_spawn;
+        pending_shell_spawn = 1; // Defer the heavy lifting to the Compositor!
+    }
+    
+    // --- HOTKEY: CTRL + TAB (Cycle Focus) ---
     else if (scancode == 0x0F && ctrl_state) { 
         int start = keyboard_focus_tid;
         int next = (start + 1) % MAX_TASKS;
         
         while (next != start) {
             if (task_list[next].state != 0 && task_list[next].has_window) {
+                
+                // --- THE FIX ---
+                // Tell the OLD window to redraw so it loses the cyan border
+                task_list[keyboard_focus_tid].has_drawn = 1;
+                
                 keyboard_focus_tid = next;
+                
+                // Tell the NEW window to redraw so it gets the cyan border
+                task_list[keyboard_focus_tid].has_drawn = 1; 
+                // ---------------
+                
                 break;
             }
             next = (next + 1) % MAX_TASKS;
         }
     }
+    
+    // --- NORMAL TYPING ---
     else if (!(scancode & 0x80)) {
         char c = scancode_to_ascii(scancode, shift_state);
         if (c != 0) {
             
-            // --- THE FIX: ASCII Control Code Math ---
+            // --- ASCII Control Code Math ---
             if (ctrl_state) {
                 if (c >= 'a' && c <= 'z') {
                     c = c - 'a' + 1; // Turns 's' into 19, 'q' into 17, etc.
@@ -167,11 +189,9 @@ void keyboard_handler(struct registers *regs) {
                     c = c - 'A' + 1; 
                 }
             }
-            // ----------------------------------------
 
             volatile struct task *target = &task_list[keyboard_focus_tid];
 
-            // WARNING FIX: Removed < 0 check. 
             if (target->kbd_head >= 64) target->kbd_head = 0;
             if (target->kbd_tail >= 64) target->kbd_tail = 0;
 
@@ -185,6 +205,7 @@ void keyboard_handler(struct registers *regs) {
     }
     outb(0x20, 0x20);
 }
+
 // RESTORED ASSEMBLER DEPS
 void emit_mov(uint8_t reg_code, uint32_t val, uint8_t* out_buf, uint32_t* pos) {
     out_buf[(*pos)++] = reg_code;
@@ -262,6 +283,26 @@ void syscall_handler(struct registers *regs) {
             task_list[id].window_buffer = NULL;
         }
         refresh_tiling_layout(); // Re-tile remaining windows
+
+        // --- THE DEAD FOCUS FIX ---
+        // If the dying task currently owns the keyboard, pass the torch!
+        if (keyboard_focus_tid == id) {
+            int next = (id + 1) % MAX_TASKS;
+            
+            // Loop through tasks to find a living window
+            while (next != id) {
+                if (task_list[next].state != 0 && task_list[next].has_window) {
+                    keyboard_focus_tid = next;
+                    
+                    // Tell the new window to redraw so it gets the Cyan border!
+                    task_list[next].has_drawn = 1; 
+                    break;
+                }
+                next = (next + 1) % MAX_TASKS;
+            }
+        }
+        // --------------------------
+
         regs->eip = (uint32_t)idle_task_code;
     }
     else if (regs->eax == 6) { // DRAW_RECT
