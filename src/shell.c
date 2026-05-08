@@ -55,6 +55,66 @@ void execute_command(char* input) {
         kprintf("Spawning SUICIDE task... watch the logs.\n");
         spawn_task(suicide_task,NULL, "suicide_app");
     }
+else if (kstrcmp(input, "STAT") == 0) {
+        VESA_print("--- KERNEL HEAP STATISTICS ---\n", COLOR_CYAN);
+        
+        // Call the kheap function which currently uses kprintf (serial out)
+        // We need to route that data to VESA so you can see it in the shell window.
+        
+        extern header_t* heap_start; // Bring in the heap start pointer
+        #define HEAP_INITIAL_SIZE (64 * 1024 * 1024) 
+        
+        if (!heap_start) {
+            VESA_print("Heap is not initialized.\n", COLOR_RED);
+        } else {
+            uint32_t free_mem = 0; 
+            uint32_t used_mem = 0;
+            uint32_t blocks = 0;
+            
+            header_t* curr = heap_start;
+            uint32_t heap_limit = (uint32_t)heap_start + HEAP_INITIAL_SIZE; 
+            
+            while (curr != NULL) {
+                if ((uint32_t)curr < (uint32_t)heap_start || (uint32_t)curr >= heap_limit) {
+                    VESA_print("Error: Heap linked-list corrupted!\n", COLOR_RED);
+                    break;
+                }
+
+                if (curr->is_free) free_mem += curr->size;
+                else used_mem += curr->size;
+                
+                blocks++;
+
+                if (curr->size == 0 && curr->next != NULL) {
+                    VESA_print("Error: Zero-size block detected.\n", COLOR_RED);
+                    break;
+                }
+                curr = curr->next;
+            }
+
+            char buf[32];
+            
+            VESA_print("Total Blocks: ", COLOR_WHITE);
+            itoa(blocks, buf, 10);
+            VESA_print(buf, COLOR_YELLOW);
+            VESA_print("\n", COLOR_WHITE);
+
+            VESA_print("Used Memory:  ", COLOR_WHITE);
+            itoa(used_mem / 1024, buf, 10); // Convert to KB
+            VESA_print(buf, COLOR_YELLOW);
+            VESA_print(" KB\n", COLOR_WHITE);
+
+            VESA_print("Free Memory:  ", COLOR_WHITE);
+            itoa(free_mem / 1024, buf, 10); // Convert to KB
+            VESA_print(buf, COLOR_GREEN);
+            VESA_print(" KB\n", COLOR_WHITE);
+            
+            // Helpful warning if free memory drops below 4MB
+            if (free_mem < 4194304) {
+                VESA_print("WARNING: Low Heap Memory! Close windows or REBOOT.\n", COLOR_RED);
+            }
+        }
+    }
     else if (kstrcmp(input, "PS") == 0) {
         VESA_print("TID    NAME          STATE\n", COLOR_CYAN);
         for (int i = 0; i < MAX_TASKS; i++) {
@@ -270,8 +330,10 @@ void shell_compile(const char* arg) {
     char* source_buf = (char*)fat_load_file(file);
     uint8_t* binary_buf = (uint8_t*)kmalloc(8192);
 
+    // CRITICAL FIX: Reset these ONLY ONCE before the passes begin.
     label_count = 0;
     rt_var_count = 0;
+    
     for (int pass = 1; pass <= 2; pass++) {
         uint32_t current_pos = 0;
         uint32_t binary_pos = 0;
@@ -279,7 +341,9 @@ void shell_compile(const char* arg) {
         while (current_pos < file->size) {
             char temp_line[128];
             uint32_t i = 0;
-if (pass == 2) label_count = 0;
+            
+            // BUG REMOVED: Do NOT wipe label_count here!
+
             while (current_pos < file->size && source_buf[current_pos] != '\n' && i < 127) {
                 temp_line[i++] = source_buf[current_pos++];
             }

@@ -20,4 +20,5 @@ void* kmemset(void* dest, uint32_t val, uint32_t n);
 void kheap_stats();
 void* kmemset(void* dest, uint32_t val, uint32_t n);
 void kheap_dump_map();
+void kheap_stats();
 #endif // !KHEAP

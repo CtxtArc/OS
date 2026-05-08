@@ -345,28 +345,33 @@ else if (scancode == 0x0F && ctrl_state) {
 }
 
 void emit_mov(uint8_t reg_code, uint32_t val, uint8_t* out_buf, uint32_t* pos) {
-    out_buf[(*pos)++] = reg_code;
-    kmemcpy(&out_buf[*pos], &val, 4);
+    if (out_buf) { out_buf[*pos] = reg_code; }
+    (*pos)++;
+    if (out_buf) { kmemcpy(&out_buf[*pos], &val, 4); }
     *pos += 4;
 }
 
 void emit_load(uint8_t reg_opcode, const char* arg, uint8_t* out_buf, uint32_t* pos) {
     if ((arg[0] >= '0' && arg[0] <= '9') || arg[0] == '-') {
-        uint32_t val = (arg[0] == '0' && arg[1] == 'x') ? katoh(arg) : katoi(arg);
-        out_buf[(*pos)++] = reg_opcode;
-        kmemcpy(&out_buf[*pos], &val, 4);
-        *pos += 4;
+        if (out_buf) {
+            uint32_t val = (arg[0] == '0' && arg[1] == 'x') ? katoh(arg) : (uint32_t)katoi((char*)arg);
+            out_buf[*pos] = reg_opcode;
+            kmemcpy(&out_buf[*pos + 1], &val, 4);
+        }
+        *pos += 5;
     } else {
-        uint32_t offset = get_var_offset(arg);
-        out_buf[(*pos)++] = 0x8B;
-        if      (reg_opcode == 0xB8) out_buf[(*pos)++] = 0x05;
-        else if (reg_opcode == 0xBB) out_buf[(*pos)++] = 0x1D;
-        else if (reg_opcode == 0xB9) out_buf[(*pos)++] = 0x0D;
-        else if (reg_opcode == 0xBA) out_buf[(*pos)++] = 0x15;
-        else if (reg_opcode == 0xBE) out_buf[(*pos)++] = 0x35;
-        else if (reg_opcode == 0xBF) out_buf[(*pos)++] = 0x3D;
-        kmemcpy(&out_buf[*pos], &offset, 4);
-        *pos += 4;
+        if (out_buf) {
+            uint32_t offset = get_var_offset(arg);
+            out_buf[*pos] = 0x8B;
+            if      (reg_opcode == 0xB8) out_buf[*pos+1] = 0x05;
+            else if (reg_opcode == 0xBB) out_buf[*pos+1] = 0x1D;
+            else if (reg_opcode == 0xB9) out_buf[*pos+1] = 0x0D;
+            else if (reg_opcode == 0xBA) out_buf[*pos+1] = 0x15;
+            else if (reg_opcode == 0xBE) out_buf[*pos+1] = 0x35;
+            else if (reg_opcode == 0xBF) out_buf[*pos+1] = 0x3D;
+            kmemcpy(&out_buf[*pos + 2], &offset, 4);
+        }
+        *pos += 6;
     }
 }
 
@@ -509,9 +514,12 @@ void syscall_handler(struct registers *regs) {
         // A new window needs a full initial redraw
         mark_task_dirty(id, 0, 0, sw, sh);
     }
-else if (regs->eax == 9) {
+else if (regs->eax == 9) { // PRINT_NUM (Variable)
     uint32_t offset = regs->ebx;
-    uint32_t* var_ptr = (uint32_t*)((uint32_t)task_list[id].code_ptr + offset);
+    
+    // FIX: Because the assembler writes to absolute physical addresses 
+    // (e.g. 3000), we must read from that absolute address to get the variable.
+    uint32_t* var_ptr = (uint32_t*)offset; 
     uint32_t actual_val = *var_ptr;
 
     char buf[16];
@@ -523,7 +531,6 @@ else if (regs->eax == 9) {
         uint32_t color = regs->edi;
 
         for (int i = 0; buf[i] != '\0'; i++) {
-            // Re-use the logic from DRAW_CHAR to draw into the window buffer safely
             extern uint8_t font8x8_basic[128][8];
             uint8_t* glyph = font8x8_basic[(unsigned char)buf[i]];
             int cur_x = x + (i * 8);
@@ -543,8 +550,7 @@ else if (regs->eax == 9) {
         }
         mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
     }
-}
-  else if (regs->eax == 10) { // INPUT (Get Key)
+}  else if (regs->eax == 10) { // INPUT (Get Key)
         volatile struct task* me = &task_list[id];
         
         // Check our task's specific keyboard buffer

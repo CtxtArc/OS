@@ -2,8 +2,9 @@ WINDOW 0 0 100 100
 SET frame 0
 
 LABEL loop
-    # Atomic Update: Clear the 8x8 character area with the background color (0x222222)
-    RECT 49 49 10 10 0x222222
+    # FIX: Use a 16x16 RECT to ensure all pixels from any character are erased.
+    # We shift the X/Y to 45 so the 16x16 box is centered over the 50,50 draw point.
+    RECT 45 45 16 16 0x222222
     
     CMP frame 0
     JE draw_pipe
@@ -14,7 +15,6 @@ LABEL loop
     CMP frame 3
     JE draw_bslash
     
-    # Reset sequence
     SET frame 0
     GOTO loop
 
@@ -31,7 +31,7 @@ LABEL draw_dash
     GOTO next_frame
 
 LABEL draw_bslash
-    PRINT "\\" 50 50 0x00FF00
+    PRINT "\" 50 50 0x00FF00
     GOTO next_frame
 
 LABEL next_frame

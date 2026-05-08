@@ -13,7 +13,7 @@ int pending_shell_spawn = 0;
 extern uint32_t* VESA_get_back_buffer();
 int keyboard_focus_tid = 0;
 extern int vesa_updating;
-extern int vesa_dirty; // Global link to VESA flag
+extern int vesa_dirty; 
 extern void switch_to_stack(uint32_t* old_esp, uint32_t new_esp);
 extern volatile uint32_t system_ticks;
 int multitasking_enabled = 0;
@@ -24,15 +24,12 @@ extern char klog_ram_buffer[];
 
 extern void mark_task_dirty(int id, int x, int y, int w, int h);
 
-
 void shell_task() {
     char line[128];
     int idx = 0;
 
-    //VESA_print("KDXOS Shell Started.\n", COLOR_CYAN);
     VESA_print("> ", COLOR_YELLOW);
     
-    // Force the whole window to redraw
     mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
 
     while(1) {
@@ -71,12 +68,10 @@ void shell_task() {
 }
 
 int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
-    // Check if the entry point is even valid
     if (!entry_point) return ERR_TASK_INVALID_EP;
 
     for (int i = 1; i < MAX_TASKS; i++) {
         if (task_list[i].state == 0) {
-            // Found a slot, start initialization
             kstrncpy((char*)task_list[i].name, name, 15);
             task_list[i].name[15] = '\0';
             task_list[i].total_ticks = 0;
@@ -90,7 +85,6 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
             uint32_t stack_size = 16384; 
             void* raw_stack = kmalloc(stack_size + 0x1000);
             
-            // ERROR: Memory allocation failed
             if (!raw_stack) return ERR_TASK_STACK_OOM;
             
             task_list[i].stack_ptr = raw_stack;
@@ -116,13 +110,13 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
 
             task_list[i].esp = (uint32_t)s_ptr;
             task_list[i].state = 1;
-            return i; // Success
+            return i; 
         }
     }
 
-    // ERROR: No slot found after checking all MAX_TASKS
     return ERR_TASK_TABLE_FULL;
 }
+
 uint32_t task_stacks[MAX_TASKS][1024];
 
 void yield() {
@@ -132,6 +126,7 @@ void yield() {
 void kill_task(int id) {
     if (id <= 0 || id >= MAX_TASKS) return;
 
+    // Visual Cleanup
     if (task_list[id].has_window) {
         int border = 2;
         int title_bar = 15;
@@ -142,15 +137,25 @@ void kill_task(int id) {
         vesa_dirty = 1;
         VESA_flip();
         vesa_updating = 0;
-        if (task_list[id].window_buffer) {
-            kfree(task_list[id].window_buffer);
-            task_list[id].window_buffer = NULL;
-        }
+    }
+
+    // MEMORY CLEANUP FIX: Always check and free pointers regardless of boolean flags!
+    if (task_list[id].window_buffer) {
+        kfree(task_list[id].window_buffer);
+        task_list[id].window_buffer = NULL;
+    }
+    
+    if (task_list[id].stack_ptr) { 
+        kfree(task_list[id].stack_ptr); 
+        task_list[id].stack_ptr = NULL; 
+    }
+    
+    if (task_list[id].code_ptr)  { 
+        kfree(task_list[id].code_ptr);  
+        task_list[id].code_ptr  = NULL; 
     }
 
     task_list[id].state = 0;
-    if (task_list[id].stack_ptr) { kfree(task_list[id].stack_ptr); task_list[id].stack_ptr = NULL; }
-    if (task_list[id].code_ptr)  { kfree(task_list[id].code_ptr);  task_list[id].code_ptr  = NULL; }
     task_list[id].has_window = 0;
     task_list[id].is_dirty   = 0; 
 }
@@ -299,9 +304,7 @@ void refresh_tiling_layout() {
                 int start_x = current_tile * tile_width;
                 task_list[i].win_x = start_x;
                 
-                // --- THE REMAINDER FIX ---
                 if (current_tile == gui_tasks - 1) {
-                    // Stretches to the literal end of the resolution
                     task_list[i].win_w = (sw - start_x) - (border * 2);
                 } else {
                     task_list[i].win_w = tile_width - (border * 2);
@@ -328,7 +331,10 @@ void task_create_window(int tid, int x, int y, int w, int h) {
     task_list[tid].cursor_x = 0;
     task_list[tid].cursor_y = 0;
 
-    task_list[tid].window_buffer = (uint32_t*)kmalloc(full_size * 4);
+    // DOUBLE-ALLOCATION LEAK FIX: Only allocate if one doesn't already exist.
+    if (task_list[tid].window_buffer == NULL) {
+        task_list[tid].window_buffer = (uint32_t*)kmalloc(full_size * 4);
+    }
 
     if (task_list[tid].window_buffer == NULL) {
         VESA_print("\n[OS] ERROR: Out of Memory for Task Window!\n", 0xFF0000);
@@ -349,14 +355,13 @@ void task_create_window(int tid, int x, int y, int w, int h) {
 #define TEST_RESULT_X 450 
 
 void run_startup_tests() {
-    uint32_t color_info   = 0x00FFFF; // Cyan
-    uint32_t color_title  = 0xFFFF00; // Yellow
-    uint32_t color_pass   = 0x00FF00; // Green
-    uint32_t color_fail   = 0xFF0000; // Red
-    uint32_t color_text   = 0xFFFFFF; // White
-    uint32_t desktop_blue = 0x000033; // Your specific background color
+    uint32_t color_info   = 0x00FFFF; 
+    uint32_t color_title  = 0xFFFF00; 
+    uint32_t color_pass   = 0x00FF00; 
+    uint32_t color_fail   = 0xFF0000; 
+    uint32_t color_text   = 0xFFFFFF; 
+    uint32_t desktop_blue = 0x000033; 
 
-    // 1. Clear screen to ensure no leftover grey exists
     VESA_draw_rect(0, 0, 1024, 768, desktop_blue);
 
     int cur_y = 150;
@@ -369,19 +374,13 @@ void run_startup_tests() {
     itoa(mbi->framebuffer_width, num_buf_w, 10);
     itoa(mbi->framebuffer_height, num_buf_h, 10);
     
-    // --- 1. VESA INFO (Aligned Fix) ---
     VESA_print_at("[INFO] VESA Resolution:", TEST_LABEL_X, cur_y, color_text);
-    
-    // Print Width
     VESA_print_at(num_buf_w, TEST_RESULT_X, cur_y, color_info);
-    // Print 'x' after the width string
     int x_pos = TEST_RESULT_X + (kstrlen(num_buf_w) * 8) + 4;
     VESA_print_at("x", x_pos, cur_y, color_text);
-    // Print Height after the 'x'
     VESA_print_at(num_buf_h, x_pos + 12, cur_y, color_info);
     cur_y += 25;
 
-    // --- 2. KHEAP TEST ---
     VESA_print_at("[TEST] KHeap Integrity:", TEST_LABEL_X, cur_y, color_text);
     void* p1 = kmalloc(512);
     if (p1) {
@@ -392,7 +391,6 @@ void run_startup_tests() {
     }
     cur_y += 25;
 
-    // --- 3. FAT TEST ---
     VESA_print_at("[TEST] FAT File System:", TEST_LABEL_X, cur_y, color_text);
     if (fat_search("BG.BMP")) {
         VESA_print_at("[ PASS ]", TEST_RESULT_X, cur_y, color_pass);
@@ -401,18 +399,17 @@ void run_startup_tests() {
     }
     cur_y += 50;
 
-    // --- FOOTER ---
     VESA_print_at("DIAGNOSTICS COMPLETE.", TEST_LABEL_X, cur_y, color_info); cur_y += 25;
     VESA_print_at("PRESS ANY KEY TO BOOT KDXOS...", TEST_LABEL_X, cur_y, color_title);
     
     vesa_dirty = 1; 
     VESA_flip();
 
-    // Clear keyboard junk and wait
     while(has_key_in_buffer()) { get_key_from_buffer(); }
     while(!has_key_in_buffer()) { yield(); }
-    get_key_from_buffer(); // Consume the key so it doesn't hit the shell
+    get_key_from_buffer(); 
 }
+
 void init_multitasking() {
     __asm__ volatile("cli"); 
 
@@ -439,10 +436,6 @@ void init_multitasking() {
         for(uint32_t p = 0; p < full_size; p++) desktop_bg_buffer[p] = 0x111111;
         load_desktop_wallpaper("BG.BMP");
     }
-
-    //int shell_tid = spawn_task(shell_task, NULL, "shell");
-    //task_create_window(shell_tid, 0, 0, 0, 0);
-    //keyboard_focus_tid = shell_tid;
 
     spawn_task(idle_task_code, NULL, "idle");
     spawn_task(compositor_task, NULL, "wm");
@@ -492,7 +485,6 @@ void compositor_task() {
             }
         }
 
-        // --- FULL REDRAW ---
         if (gui_tasks != last_gui_count) {
             last_gui_count = gui_tasks;
             refresh_tiling_layout();
@@ -539,12 +531,10 @@ void compositor_task() {
             continue;
         }
 
-        // --- FAST PATH (BATCHED) ---
         if (needs_update) {
             int tile_width = (gui_tasks > 0) ? sw / gui_tasks : sw;
             int current_tile = 0;
 
-            // Initialize Master Bounding Box parameters
             int min_x = sw, min_y = sh, max_x = 0, max_y = 0;
             int did_draw = 0;
 
@@ -589,11 +579,10 @@ void compositor_task() {
                                 }
                             }
 
-                            // EXPAND THE MASTER BOUNDING BOX
                             if (start_x < min_x) min_x = start_x;
-                            if (0 < min_y) min_y = 0; // Borders touch Y=0
+                            if (0 < min_y) min_y = 0; 
                             if (start_x + current_tile_w > max_x) max_x = start_x + current_tile_w;
-                            if ((int)sh > max_y) max_y = sh; // Borders touch Y=sh
+                            if ((int)sh > max_y) max_y = sh; 
                             
                             did_draw = 1;
                         }
@@ -602,7 +591,6 @@ void compositor_task() {
                 }
             }
             
-            // PERFORM ONE SINGLE UNIFIED VESA UPDATE
             if (did_draw) {
                 VESA_update_rect(min_x, min_y, max_x - min_x, max_y - min_y);
             }
