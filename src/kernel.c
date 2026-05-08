@@ -35,6 +35,7 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
 
     // 4. Filesystem & Tasks
     fat_init();
+run_startup_tests();
     init_multitasking(); 
 
     // 5. Final output and interrupts

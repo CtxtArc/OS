@@ -5,6 +5,9 @@
 #include "io.h"
 #include "shell.h"
 #include "lib.h"
+#include "fat.h"
+#include "lib.h"
+
 
 extern uint32_t* VESA_get_back_buffer();
 int keyboard_focus_tid = 0;
@@ -414,4 +417,95 @@ void compositor_task() {
         VESA_flip();
         sleep(10);
     }
+}
+void run_startup_tests() {
+    VESA_print("\n--- Running KDXOS System Diagnostics ---\n", 0x00FFFF);
+
+    // ==========================================
+    // TEST 1: KERNEL HEAP ALLOCATOR (kheap)
+    // ==========================================
+    VESA_print("[TEST] KHeap Integrity & Splitting... ", 0xFFFFFF);
+    
+    // 1. Allocate three adjacent blocks
+    uint32_t* ptr1 = (uint32_t*)kmalloc(1024);
+    uint32_t* ptr2 = (uint32_t*)kmalloc(2048);
+    uint32_t* ptr3 = (uint32_t*)kmalloc(4096);
+
+    if (!ptr1 || !ptr2 || !ptr3) {
+        VESA_print("FAIL (Out of Memory)\n", 0xFF0000);
+    } else {
+        // 2. Write Magic Numbers to ensure no overlaps
+        ptr1[0] = 0xDEADBEEF;
+        ptr2[0] = 0xCAFEBABE;
+        ptr3[0] = 0x12345678;
+
+        if (ptr1[0] == 0xDEADBEEF && ptr2[0] == 0xCAFEBABE && ptr3[0] == 0x12345678) {
+            
+            // 3. Test the "Healer Split" logic
+            kfree(ptr2); // Free the 2048-byte middle block
+            
+            // Request 1024 bytes. It should split the old ptr2 block and give us the exact same address back!
+            uint32_t* ptr2_half = (uint32_t*)kmalloc(1024);
+            
+            if ((uint32_t)ptr2_half == (uint32_t)ptr2) {
+                VESA_print("PASS\n", 0x00FF00);
+            } else {
+                VESA_print("WARN (Split Logic Failed)\n", 0xFFFF00);
+            }
+            kfree(ptr2_half);
+        } else {
+            VESA_print("FAIL (Memory Corruption Detected)\n", 0xFF0000);
+        }
+        
+        // 4. Free remaining blocks to test coalescing
+        kfree(ptr1);
+        kfree(ptr3);
+    }
+
+    // ==========================================
+    // TEST 2: FAT FILESYSTEM (Read/Write/Search)
+    // ==========================================
+    VESA_print("[TEST] FAT Disk I/O & Persistence...  ", 0xFFFFFF);
+    
+    char test_file[] = "DIAG.TXT";
+    char test_data[] = "KDXOS_HARD_DISK_INTEGRITY_CHECK_PASS";
+
+    // 1. Create and Write
+    fat_touch(test_file);
+    fat_write_file(test_file, test_data);
+
+    // 2. Search for the newly created file
+    struct fat_dir_entry* entry = fat_search(test_file);
+    if (entry) {
+        // 3. Read it back from the IDE disk
+        char* loaded = (char*)fat_load_file(entry);
+        if (loaded) {
+            // 4. Verify contents byte-by-byte
+            int match = 1;
+            for (int i = 0; test_data[i] != '\0'; i++) {
+                if (loaded[i] != test_data[i]) { 
+                    match = 0; 
+                    break; 
+                }
+            }
+
+            if (match) {
+                VESA_print("PASS\n", 0x00FF00);
+            } else {
+                VESA_print("FAIL (Data Mismatch/Corruption)\n", 0xFF0000);
+            }
+
+            kfree(loaded);
+        } else {
+            VESA_print("FAIL (Could not load file data)\n", 0xFF0000);
+        }
+        
+        // 5. Clean up so we don't clutter the disk on every boot
+        fat_rm(test_file);
+    } else {
+        VESA_print("FAIL (File Creation Error)\n", 0xFF0000);
+    }
+
+    VESA_print("--- Diagnostics Complete ---\n\n", 0x00FFFF);
+    sleep(2000);
 }
