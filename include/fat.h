@@ -48,8 +48,8 @@ struct fat_dir_entry {
     uint16_t last_write_date;
     uint16_t first_cluster_low;  // The actual cluster
     uint32_t size;               // Offset 28
-} __attribute__((packed));       // <--- REQUIRED
-                                 //
+} __attribute__((packed));       
+
 void fat_init();
 uint32_t cluster_to_lba(uint32_t cluster); 
 uint16_t fat_get_next_cluster(uint16_t cluster);

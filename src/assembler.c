@@ -107,7 +107,7 @@ char arg_str[32]; // Fixed: Declared here for general use
             ptr = get_token(ptr, var_name);
             ptr = get_token(ptr, val_str);
             uint32_t offset = get_var_offset(var_name);
-            uint32_t val = (val_str[0] == '0' && val_str[1] == 'x') ? katoh(val_str) : katoi(val_str);
+            uint32_t val = (val_str[0] == '0' && val_str[1] == 'x') ? katoh(val_str) : (uint32_t)katoi(val_str);
 
             out_buf[(*pos)++] = 0xC7; // MOV DWORD PTR [mem]
             out_buf[(*pos)++] = 0x05; // ModR/M for disp32
@@ -135,6 +135,35 @@ char arg_str[32]; // Fixed: Declared here for general use
             *pos += 10;
         }
     }
+else if (kstrcmp(cmd, "INPUT") == 0) {
+    if (pass == 2) {
+        char var_name[32];
+        get_token(ptr, var_name);
+        uint32_t offset = get_var_offset(var_name);
+
+        emit_load(0xB8, "10", out_buf, pos); // Syscall 10: GET_KEY
+        out_buf[(*pos)++] = 0xCD; out_buf[(*pos)++] = 0x80;
+        
+        // Save the result from EAX into our variable
+        out_buf[(*pos)++] = 0xA3; // MOV [disp32], EAX
+        kmemcpy(&out_buf[*pos], &offset, 4); *pos += 4;
+    } else { *pos += 13; }
+}
+else if (kstrcmp(cmd, "SUB") == 0) {
+
+    if (pass == 2) {
+        char var_name[32], val_str[32];
+        ptr = get_token(ptr, var_name);
+        ptr = get_token(ptr, val_str);
+        uint32_t offset = get_var_offset(var_name);
+        uint32_t amount = katoi(val_str);
+
+        out_buf[(*pos)++] = 0x81; // SUB DWORD PTR [mem]
+        out_buf[(*pos)++] = 0x2D; // ModR/M for SUB with disp32
+        kmemcpy(&out_buf[*pos], &offset, 4); *pos += 4;
+        kmemcpy(&out_buf[*pos], &amount, 4); *pos += 4;
+    } else { *pos += 10; }
+}
 
     else if (kstrcmp(cmd, "PRINT") == 0) {
     const char* p = line;
@@ -236,16 +265,18 @@ else if (kstrcmp(cmd, "CMP") == 0) {
     ptr = get_token(ptr, val_str);
     
     if (pass == 2) {
-        // Load the variable into EAX to compare it
-        emit_load(0xB8, var_name, out_buf, pos);
+        uint32_t offset = get_var_offset(var_name);
+        uint32_t val = (val_str[0] == '0' && val_str[1] == 'x') ? katoh(val_str) :(uint32_t) katoi(val_str);
+
+        // MOV EAX, [disp32] -> Opcode 0xA1
+        out_buf[(*pos)++] = 0xA1;
+        kmemcpy(&out_buf[*pos], &offset, 4); *pos += 4;
         
-        // CMP EAX, immediate_value (Opcode 0x3D)
-        uint32_t val = (val_str[0] == '0' && val_str[1] == 'x') ? katoh(val_str) : katoi(val_str);
-        out_buf[(*pos)++] = 0x3D; 
-        kmemcpy(&out_buf[*pos], &val, 4);
-        *pos += 4;
+        // CMP EAX, imm32 -> Opcode 0x3D
+        out_buf[(*pos)++] = 0x3D;
+        kmemcpy(&out_buf[*pos], &val, 4); *pos += 4;
     } else {
-        *pos += 11; // 6 (emit_load) + 5 (cmp)
+        *pos += 10; // 5 (mov) + 5 (cmp)
     }
 }
 else if (kstrcmp(cmd, "JE") == 0 || kstrcmp(cmd, "JL") == 0 || kstrcmp(cmd, "JG") == 0) {

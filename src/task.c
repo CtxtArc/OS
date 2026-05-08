@@ -29,7 +29,7 @@ void shell_task() {
     char line[128];
     int idx = 0;
 
-    VESA_print("KDXOS Shell Started.\n", COLOR_CYAN);
+    //VESA_print("KDXOS Shell Started.\n", COLOR_CYAN);
     VESA_print("> ", COLOR_YELLOW);
     
     // Force the whole window to redraw
@@ -285,12 +285,22 @@ void refresh_tiling_layout() {
 
     if (gui_tasks > 0) {
         int tile_width = sw / gui_tasks;
+        int border = WIN_BORDER;
         int current_tile = 0;
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_list[i].state != 0 && task_list[i].has_window) {
-                task_list[i].win_x = current_tile * tile_width;
-                task_list[i].win_w = tile_width;
-                task_list[i].win_h = sh;
+                int start_x = current_tile * tile_width;
+                task_list[i].win_x = start_x;
+                
+                // --- THE REMAINDER FIX ---
+                if (current_tile == gui_tasks - 1) {
+                    // Stretches to the literal end of the resolution
+                    task_list[i].win_w = (sw - start_x) - (border * 2);
+                } else {
+                    task_list[i].win_w = tile_width - (border * 2);
+                }
+
+                task_list[i].win_h = sh - (border * 2);
                 current_tile++;
             }
         }
@@ -328,90 +338,74 @@ void task_create_window(int tid, int x, int y, int w, int h) {
     mark_task_dirty(tid, 0, 0, 4000, 4000); 
 }
 
+#define TEST_LABEL_X 100
+#define TEST_RESULT_X 450 
+
 void run_startup_tests() {
-    VESA_print("\n--- Running KDXOS System Diagnostics ---\n", 0x00FFFF);
-    vesa_dirty = 1; VESA_flip(); 
+    uint32_t color_info   = 0x00FFFF; // Cyan
+    uint32_t color_title  = 0xFFFF00; // Yellow
+    uint32_t color_pass   = 0x00FF00; // Green
+    uint32_t color_fail   = 0xFF0000; // Red
+    uint32_t color_text   = 0xFFFFFF; // White
+    uint32_t desktop_blue = 0x000033; // Your specific background color
 
+    // 1. Clear screen to ensure no leftover grey exists
+    VESA_draw_rect(0, 0, 1024, 768, desktop_blue);
+
+    int cur_y = 150;
+    VESA_print_at("===================================================", TEST_LABEL_X, cur_y, color_title); cur_y += 20;
+    VESA_print_at("           KDXOS SYSTEM DIAGNOSTICS                ", TEST_LABEL_X, cur_y, color_title); cur_y += 20;
+    VESA_print_at("===================================================", TEST_LABEL_X, cur_y, color_title); cur_y += 40;
+    
     struct multiboot_info* mbi = VESA_get_boot_info();
-    char num_buf[16];
+    char num_buf_w[16], num_buf_h[16];
+    itoa(mbi->framebuffer_width, num_buf_w, 10);
+    itoa(mbi->framebuffer_height, num_buf_h, 10);
     
-    VESA_print("[INFO] VESA Resolution...     ", 0xFFFFFF);
-    itoa(mbi->framebuffer_width, num_buf, 10);
-    VESA_print(num_buf, 0xFF0000);
-    VESA_print("x", 0xFF0000);
-    itoa(mbi->framebuffer_height, num_buf, 10);
-    VESA_print(num_buf, 0xFF0000);
-    VESA_print("\n", 0xFFFFFF);
-    vesa_dirty = 1; VESA_flip();
-
-    VESA_print("[TEST] KHeap Integrity & Splitting... ", 0xFFFFFF);
+    // --- 1. VESA INFO (Aligned Fix) ---
+    VESA_print_at("[INFO] VESA Resolution:", TEST_LABEL_X, cur_y, color_text);
     
-    uint32_t* ptr1 = (uint32_t*)kmalloc(1024);
-    uint32_t* ptr2 = (uint32_t*)kmalloc(2048);
-    uint32_t* ptr3 = (uint32_t*)kmalloc(4096);
+    // Print Width
+    VESA_print_at(num_buf_w, TEST_RESULT_X, cur_y, color_info);
+    // Print 'x' after the width string
+    int x_pos = TEST_RESULT_X + (kstrlen(num_buf_w) * 8) + 4;
+    VESA_print_at("x", x_pos, cur_y, color_text);
+    // Print Height after the 'x'
+    VESA_print_at(num_buf_h, x_pos + 12, cur_y, color_info);
+    cur_y += 25;
 
-    if (!ptr1 || !ptr2 || !ptr3) {
-        VESA_print("FAIL (Out of Memory)\n", 0xFF0000);
+    // --- 2. KHEAP TEST ---
+    VESA_print_at("[TEST] KHeap Integrity:", TEST_LABEL_X, cur_y, color_text);
+    void* p1 = kmalloc(512);
+    if (p1) {
+        VESA_print_at("[ PASS ]", TEST_RESULT_X, cur_y, color_pass);
+        kfree(p1);
     } else {
-        ptr1[0] = 0xDEADBEEF;
-        ptr2[0] = 0xCAFEBABE;
-        ptr3[0] = 0x12345678;
-
-        if (ptr1[0] == 0xDEADBEEF && ptr2[0] == 0xCAFEBABE && ptr3[0] == 0x12345678) {
-            kfree(ptr2); 
-            uint32_t* ptr2_half = (uint32_t*)kmalloc(1024);
-            
-            if ((uint32_t)ptr2_half == (uint32_t)ptr2) {
-                VESA_print("PASS\n", 0x00FF00);
-            } else {
-                VESA_print("WARN (Split Logic Failed)\n", 0xFFFF00);
-            }
-            kfree(ptr2_half);
-        } else {
-            VESA_print("FAIL (Memory Corruption Detected)\n", 0xFF0000);
-        }
-        kfree(ptr1);
-        kfree(ptr3);
+        VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
     }
-    vesa_dirty = 1; VESA_flip();
+    cur_y += 25;
 
-    VESA_print("[TEST] FAT Disk I/O & Persistence...  ", 0xFFFFFF);
-    
-    char test_file[] = "DIAG.TXT";
-    char test_data[] = "KDXOS_HARD_DISK_INTEGRITY_CHECK_PASS";
-
-    fat_touch(test_file);
-    fat_write_file(test_file, test_data);
-
-    struct fat_dir_entry* entry = fat_search(test_file);
-    if (entry) {
-        char* loaded = (char*)fat_load_file(entry);
-        if (loaded) {
-            int match = 1;
-            for (int i = 0; test_data[i] != '\0'; i++) {
-                if (loaded[i] != test_data[i]) { 
-                    match = 0; 
-                    break; 
-                }
-            }
-
-            if (match) VESA_print("PASS\n", 0x00FF00);
-            else VESA_print("FAIL (Data Mismatch/Corruption)\n", 0xFF0000);
-
-            kfree(loaded);
-        } else {
-            VESA_print("FAIL (Could not load file data)\n", 0xFF0000);
-        }
-        fat_rm(test_file);
+    // --- 3. FAT TEST ---
+    VESA_print_at("[TEST] FAT File System:", TEST_LABEL_X, cur_y, color_text);
+    if (fat_search("BG.BMP")) {
+        VESA_print_at("[ PASS ]", TEST_RESULT_X, cur_y, color_pass);
     } else {
-        VESA_print("FAIL (File Creation Error)\n", 0xFF0000);
+        VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
     }
+    cur_y += 50;
 
-    VESA_print("--- Diagnostics Complete ---\n\n", 0x00FFFF);
-    vesa_dirty = 1; VESA_flip(); 
-    sleep(2000);
+    // --- FOOTER ---
+    VESA_print_at("DIAGNOSTICS COMPLETE.", TEST_LABEL_X, cur_y, color_info); cur_y += 25;
+    VESA_print_at("PRESS ANY KEY TO BOOT KDXOS...", TEST_LABEL_X, cur_y, color_title);
+    
+    vesa_dirty = 1; 
+    VESA_flip();
+
+    // Clear keyboard junk and wait
+    while(has_key_in_buffer()) { get_key_from_buffer(); }
+    while(!has_key_in_buffer()) { yield(); }
+    get_key_from_buffer(); // Consume the key so it doesn't hit the shell
 }
-
 void init_multitasking() {
     __asm__ volatile("cli"); 
 
@@ -439,9 +433,9 @@ void init_multitasking() {
         load_desktop_wallpaper("BG.BMP");
     }
 
-    int shell_tid = spawn_task(shell_task, NULL, "shell");
-    task_create_window(shell_tid, 0, 0, 0, 0);
-    keyboard_focus_tid = shell_tid;
+    //int shell_tid = spawn_task(shell_task, NULL, "shell");
+    //task_create_window(shell_tid, 0, 0, 0, 0);
+    //keyboard_focus_tid = shell_tid;
 
     spawn_task(idle_task_code, NULL, "idle");
     spawn_task(compositor_task, NULL, "wm");

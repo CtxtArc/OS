@@ -281,10 +281,36 @@ void keyboard_handler(struct registers *regs) {
         else if (scancode == 0x38) alt_state = 1; // Left Alt
         else if (scancode == 0x3B) keyboard_focus_tid = 0; // F1
         
-        // Hotkeys
-        else if (scancode == 0x0F && ctrl_state) { 
-            /* Your CTRL+TAB logic here */ 
+// --- HOTKEY: CTRL + TAB (Cycle Focus) ---
+else if (scancode == 0x0F && ctrl_state) {
+    int start = keyboard_focus_tid;
+    int next = (start + 1) % MAX_TASKS;
+
+    // Search for the next available task that has a window
+    while (next != start) {
+        if (task_list[next].state != 0 && task_list[next].has_window) {
+            
+            // 1. Mark the old focused window as dirty (to update border to Grey)
+            mark_task_dirty(keyboard_focus_tid, 0, 0, 
+                            task_list[keyboard_focus_tid].win_w, 
+                            task_list[keyboard_focus_tid].win_h);
+            
+            // 2. Switch focus
+            keyboard_focus_tid = next;
+            
+            // 3. Mark the new focused window as dirty (to update border to Cyan)
+            mark_task_dirty(keyboard_focus_tid, 0, 0, 
+                            task_list[keyboard_focus_tid].win_w, 
+                            task_list[keyboard_focus_tid].win_h);
+            
+            // Wake up the task if it was blocking on getchar()
+            if (task_list[next].state == 3) task_list[next].state = 1;
+            
+            break;
         }
+        next = (next + 1) % MAX_TASKS;
+    }
+}
         else if (scancode == 0x1C && alt_state) { 
             extern int pending_shell_spawn; 
             pending_shell_spawn = 1; 
@@ -351,33 +377,40 @@ void syscall_handler(struct registers *regs) {
     uint32_t sw = mbi->framebuffer_width;
     uint32_t sh = mbi->framebuffer_height;
     int id = current_task_idx;
+    int border = WIN_BORDER;
 
-    if (regs->eax == 1) { // DRAW_CHAR
-        char c    = (char)regs->ebx;
-        int x     = regs->ecx;
-        int y     = regs->edx;
+  if (regs->eax == 1) { // DRAW_CHAR
+    char c    = (char)regs->ebx;
+    int x     = regs->ecx + border;
+    int y     = regs->edx + border;
 
-        if (task_list[id].has_window && task_list[id].window_buffer) {
-            extern uint8_t font8x8_basic[128][8];
-            uint8_t* glyph = font8x8_basic[(int)c];
-            
-            for (int row = 0; row < 8; row++) {
-                for (int col = 0; col < 8; col++) {
+    if (task_list[id].has_window && task_list[id].window_buffer) {
+        extern uint8_t font8x8_basic[128][8];
+        uint8_t* glyph = font8x8_basic[(int)c];
+        
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 8; col++) {
+                // Check if the specific pixel in the font glyph is active
+                if (glyph[row] & (1 << (7 - col))) {
                     int draw_x = x + col;
                     int draw_y = y + row;
+
                     if (draw_x >= 0 && draw_x < task_list[id].win_w && draw_y >= 0 && draw_y < task_list[id].win_h) {
-                        task_list[id].window_buffer[(draw_y * sw) + draw_x] = 
-                            (glyph[row] & (1 << (7 - col))) ? 0xFFFFFF : 0x222222;
-                    }
-                }
-            }
-            // Mark the 8x8 character bounding box
-            mark_task_dirty(id, x, y, 8, 8);
-        } else {
-            VESA_draw_char(c, x, y, 0xFFFFFF);
-        }
+    // Check if the font bit is 1
+    if (glyph[row] & (1 << (7 - col))) {
+        task_list[id].window_buffer[(draw_y * sw) + draw_x] = 0xFFFFFF; // White text
     }
-    else if (regs->eax == 2) { // GET_TICKS
+    // DO NOT ADD AN ELSE. If it's 0, we don't touch the pixel.
+}
+                }
+                // We removed the 'else'—if the bit is 0, we simply don't touch the buffer,
+                // leaving the background blue (or whatever was there before).
+            }
+        }
+        mark_task_dirty(id, x, y, 8, 8);
+    }
+}  
+  else if (regs->eax == 2) { // GET_TICKS
         regs->eax = system_ticks;
     }
     else if (regs->eax == 3) { // SLEEP(ms)
@@ -409,7 +442,7 @@ void syscall_handler(struct registers *regs) {
         regs->eip = (uint32_t)idle_task_code;
     }
     else if (regs->eax == 6) { // DRAW_RECT
-        int rx = regs->ebx; int ry = regs->ecx;
+        int rx = regs->ebx + border; int ry = regs->ecx + border;
         int rw = regs->edx; int rh = regs->esi;
         uint32_t color = regs->edi;
 
@@ -430,8 +463,8 @@ void syscall_handler(struct registers *regs) {
         uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
         char* str = (char*)(regs->ebx + aligned_code);
         
-        int sx = regs->ecx; 
-        int sy = regs->edx;
+        int sx = regs->ecx + border; 
+        int sy = regs->edx + border;
         uint32_t color = regs->edi;
 
         int chars_printed = 0;
@@ -477,5 +510,37 @@ void syscall_handler(struct registers *regs) {
         
         // A new window needs a full initial redraw
         mark_task_dirty(id, 0, 0, sw, sh);
+    }
+else if (regs->eax == 9) {
+    uint32_t offset = regs->ebx; // This is 3000, 3004, etc.
+    
+    // Calculate the actual physical address in RAM
+    // Code and Variables both live inside task_list[id].code_ptr
+    uint32_t* var_ptr = (uint32_t*)((uint32_t)task_list[id].code_ptr + offset);
+    uint32_t actual_val = *var_ptr; // Read the actual number!
+
+    char buf[16];
+    itoa(actual_val, buf, 10);
+    
+    if (task_list[id].has_window && task_list[id].window_buffer) {
+        int x = regs->ecx; int y = regs->edx;
+        uint32_t color = regs->edi;
+        for (int i = 0; buf[i] != '\0'; i++) {
+            VESA_draw_char(buf[i], x + (i * 8), y, color); 
+        }
+        mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
+    }
+}
+    else if (regs->eax == 10) { // INPUT (Get Key)
+        volatile struct task* me = &task_list[id];
+        
+        // Check our task's specific keyboard buffer
+        if (me->kbd_head != me->kbd_tail) {
+            char c = me->kbd_buffer[me->kbd_tail];
+            me->kbd_tail = (me->kbd_tail + 1) % 64;
+            regs->eax = (uint32_t)c; // Return the key in EAX
+        } else {
+            regs->eax = 0; // No key pressed
+        }
     }
 }

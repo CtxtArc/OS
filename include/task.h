@@ -5,6 +5,7 @@
 #define MAX_TASKS 10
 #define STACK_SIZE 4096
 #define TASK_KBD_BUF_SIZE 64
+#define WIN_BORDER 2
 
 struct task {
     uint32_t esp;

@@ -41,7 +41,8 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
 
     // 5. Final output and interrupts
     __asm__ volatile("sti");
-    VESA_print("KDXOS Kernel Ready.\n", 0x00FF00);
     
-    shell_task();
+while(1) {
+        __asm__ volatile("hlt"); // Put the CPU in a low-power state until the next timer tick
+    }
 }
