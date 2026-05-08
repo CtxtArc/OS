@@ -115,25 +115,30 @@ irq0_handler:
 
 global irq1_handler
 irq1_handler:
-    push byte 0         
-    push byte 33        
+    push byte 0
+    push byte 33
     pusha
     mov ax, ds
     push eax
-
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-
     push esp
     call keyboard_handler
     add esp, 4
 
+    ; Immediately switch to the woken task (same as irq0)
+    mov eax, [next_stack_ptr]
+    test eax, eax
+    jz .no_switch
+    mov esp, eax
+    mov dword [next_stack_ptr], 0
+.no_switch:
     pop eax
     mov ds, ax
     mov es, ax
     popa
-    add esp, 8          
+    add esp, 8
     iret
 
 ; --- System Call Handler (int 0x80) ---

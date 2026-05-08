@@ -81,4 +81,6 @@ struct fat_dir_entry* fat_search_in(const char* filename, uint32_t start_cluster
 uint32_t fat_get_cluster_from_path(const char* path);
 void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size);
 void test_multi_sector_write();
+
+void fat_append_file(const char* filename, const char* data);
 #endif // !FAT_H

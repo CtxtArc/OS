@@ -29,7 +29,7 @@ __attribute__((always_inline)) static inline void outb(uint16_t port, uint8_t va
 /* --- Function Prototypes (Logic in io.c) --- */
 uint8_t keyboard_read_status();
 uint8_t keyboard_read_scancode();
-char scancode_to_ascii(uint8_t scancode, int shift);
+char scancode_to_ascii(uint8_t scancode, int shift, int altgr);
 uint16_t inw(uint16_t port);
 void outw(uint16_t port, uint16_t data);
 #endif

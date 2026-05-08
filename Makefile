@@ -91,7 +91,10 @@ $(KERNEL_ISO): $(KERNEL_BIN)
 	@rm -rf isodir
 
 run:
-	qemu-system-i386 -cdrom $(KERNEL_ISO) -hda disk.img -boot d
+	qemu-system-i386 -cdrom $(KERNEL_ISO) -hda disk.img -boot d \
+	-vga std \
+	-display sdl,gl=on \
+	-m 256
 
 clean:
 	rm -rf $(BUILDDIR) $(BINDIR) isodir

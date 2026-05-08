@@ -6,7 +6,6 @@
 #include "pmm.h"
 #include "task.h"
 #include "kheap.h"
-#include "idt.h"
 #include "fat.h"
 #include "KED.h"
 #include "assembler.h"
@@ -19,6 +18,10 @@ extern uint32_t total_pages;
 extern uint32_t timer_frequency;
 extern uint32_t target_fps;
 extern int keyboard_focus_tid;
+extern int current_task_idx;
+
+// Bring in the dirty rectangle helper
+extern void mark_task_dirty(int id, int x, int y, int w, int h);
 
 char* find_space(char* str) {
     while (*str) {
@@ -44,13 +47,11 @@ void execute_command(char* input) {
         arg++;
     }
 
-    vesa_updating = 1;
-
     // --- SYSTEM & INFO ---
     if (kstrcmp(input, "HELP") == 0) {
         VESA_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL SLEEP RUN TOP UPTIME REBOOT CRASH ECHO SET_FPS TIMER GAME HEXDUMP WRITE COMPILE KED\n", COLOR_WHITE);
     }
-  else if (kstrcmp(input, "SUICIDE") == 0) {
+    else if (kstrcmp(input, "SUICIDE") == 0) {
         kprintf("Spawning SUICIDE task... watch the logs.\n");
         spawn_task(suicide_task,NULL, "suicide_app");
     }
@@ -73,7 +74,7 @@ void execute_command(char* input) {
     }
     else if (kstrcmp(input, "UPTIME") == 0) {
         char buf[32];
-        uint32_t s = system_ticks / 100;
+        uint32_t s = system_ticks / 1000; // Adjusted for 1000Hz timer!
         VESA_print("Uptime: ", COLOR_WHITE);
         itoa(s, buf, 10);
         VESA_print(buf, COLOR_CYAN);
@@ -81,8 +82,9 @@ void execute_command(char* input) {
     }
     else if (kstrcmp(input, "CLEAR") == 0) {
         VESA_clear_buffer_only();
-        task_list[0].cursor_x = 0;
-        task_list[0].cursor_y = 0;
+        // THE FIX: Use current_task_idx, not hardcoded 0
+        task_list[current_task_idx].cursor_x = 0;
+        task_list[current_task_idx].cursor_y = 0;
     }
     else if (kstrcmp(input, "ECHO") == 0) {
         if (arg) { VESA_print(arg, COLOR_WHITE); VESA_print("\n", COLOR_WHITE); }
@@ -174,8 +176,8 @@ void execute_command(char* input) {
     // --- NATIVE APPS & TASKS ---
     else if (kstrcmp(input, "KED") == 0) {
         if (arg) {
-            extern void KED_init(const char* filename); // Prep KED with filename
-            extern void KED_task();                     // The actual infinite loop function
+            extern void KED_init(const char* filename); 
+            extern void KED_task();                     
 
             KED_init(arg);
             int tid = spawn_task(KED_task, NULL, "KED");
@@ -200,7 +202,6 @@ void execute_command(char* input) {
     else if (kstrcmp(input, "TIMER") == 0) {
         extern void task_timer();
         spawn_task(task_timer, NULL, "TIMER"); 
-        // Note: Timer uses VESA_print_at (raw coordinates), so it doesn't need a window buffer!
         VESA_print("Background Timer Spawned.\n", COLOR_GREEN);
     }
 
@@ -240,8 +241,8 @@ void execute_command(char* input) {
         VESA_print("\n", COLOR_RED);
     }
 
-    task_list[0].has_drawn = 1;
-    vesa_updating = 0;
+    // THE FIX: Trigger a UI update for the shell to ensure command output is visible
+    mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
 }
 
 void shell_compile(const char* arg) {

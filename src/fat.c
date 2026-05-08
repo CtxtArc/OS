@@ -1138,3 +1138,107 @@ void test_multi_sector_write() {
     kfree(test_buffer);
     //kprintf_unsync("Test complete. Check 'ls' and run 'BIGSPIN.BIN'\n");
 }
+void fat_append_file(const char* filename, const char* data) {
+    if (!filename || !data) return;
+
+    struct fat_dir_entry* entry = fat_search(filename);
+    if (!entry) {
+        kprintf_unsync("Append Error: File not found.\n");
+        return;
+    }
+
+    uint32_t append_len = kstrlen(data);
+    uint32_t old_size = entry->size;
+    uint32_t new_size = old_size + append_len;
+
+    // 1. Find the LAST cluster of the existing file
+    uint16_t current_cluster = entry->first_cluster_low;
+    uint16_t last_cluster = current_cluster;
+
+    if (current_cluster == 0) {
+        // File is empty, just use normal write
+        fat_write_file(filename, data);
+        return;
+    }
+
+    while (1) {
+        uint16_t next = fat_get_next_cluster(last_cluster);
+        if (next >= 0xFFF8 || next < 2) break;
+        last_cluster = next;
+    }
+
+    // 2. Handle the "Slack Space" in the last sector
+    // Calculate how many bytes into the last cluster the current file ends
+    uint32_t bytes_in_last_cluster = old_size % (bpb.sectors_per_cluster * 512);
+    uint32_t slack_in_cluster = (bpb.sectors_per_cluster * 512) - bytes_in_last_cluster;
+    
+    uint32_t data_offset = 0;
+
+    if (bytes_in_last_cluster > 0) {
+        // We need to read the last sector, patch it, and write it back
+        uint32_t sector_in_cluster = (bytes_in_last_cluster / 512);
+        uint32_t byte_offset_in_sector = bytes_in_last_cluster % 512;
+        uint32_t slack_in_sector = 512 - byte_offset_in_sector;
+        uint32_t lba = cluster_to_lba(last_cluster) + sector_in_cluster;
+
+        uint8_t* scratch = (uint8_t*)kmalloc(512);
+        ide_read_sector(lba, scratch);
+
+        uint32_t to_write = (append_len < slack_in_sector) ? append_len : slack_in_sector;
+        kmemcpy(scratch + byte_offset_in_sector, data, to_write);
+        ide_write_sector(lba, scratch);
+        kfree(scratch);
+
+        data_offset += to_write;
+    }
+
+    // 3. If there's still data left, use the existing write loop logic to add clusters
+    if (data_offset < append_len) {
+        // We use a modified version of your write loop starting from the end of the chain
+        uint32_t bytes_remaining = append_len - data_offset;
+        const char* remaining_data = data + data_offset;
+        uint32_t loop_written = 0;
+
+        while (loop_written < bytes_remaining) {
+            // Allocate new cluster if we just finished the current one
+            // (Or if we were perfectly at the end of the last cluster)
+            uint16_t next = fat_find_free_cluster();
+            if (next == 0xFFFF) {
+                kprintf_unsync("Disk Full during append!\n");
+                break;
+            }
+            
+            fat_update_table(last_cluster, next);
+            fat_update_table(next, 0xFFFF);
+            last_cluster = next;
+
+            // Write up to a full cluster of data
+            for (int s = 0; s < bpb.sectors_per_cluster && loop_written < bytes_remaining; s++) {
+                uint8_t* sector_buf = (uint8_t*)kmalloc(512);
+                kmemset(sector_buf, 0, 128);
+                uint32_t chunk = (bytes_remaining - loop_written > 512) ? 512 : (bytes_remaining - loop_written);
+                kmemcpy(sector_buf, remaining_data + loop_written, chunk);
+                
+                ide_write_sector(cluster_to_lba(last_cluster) + s, sector_buf);
+                loop_written += chunk;
+                kfree(sector_buf);
+            }
+        }
+    }
+
+    // 4. Final step: Update the directory entry with the NEW size
+    // We search the directory again to get a fresh pointer to the buffer
+    uint32_t dir_lba = get_current_dir_lba();
+    uint8_t* dir_buf = (uint8_t*)kmalloc(512);
+    ide_read_sector(dir_lba, dir_buf);
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)dir_buf;
+
+    for (int i = 0; i < 16; i++) {
+        if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
+            entries[i].size = new_size;
+            ide_write_sector(dir_lba, dir_buf);
+            break;
+        }
+    }
+    kfree(dir_buf);
+}

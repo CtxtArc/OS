@@ -8,11 +8,12 @@
 #include "fat.h"
 #include "bmp.h"
 
-uint32_t* desktop_bg_buffer = NULL; // Our permanent wallpaper cache
+uint32_t* desktop_bg_buffer = NULL; 
 int pending_shell_spawn = 0;
 extern uint32_t* VESA_get_back_buffer();
 int keyboard_focus_tid = 0;
 extern int vesa_updating;
+extern int vesa_dirty; // Global link to VESA flag
 extern void switch_to_stack(uint32_t* old_esp, uint32_t new_esp);
 extern volatile uint32_t system_ticks;
 int multitasking_enabled = 0;
@@ -21,6 +22,8 @@ int current_task_idx = 0;
 extern volatile int klog_needs_sync;
 extern char klog_ram_buffer[];
 
+extern void mark_task_dirty(int id, int x, int y, int w, int h);
+
 
 void shell_task() {
     char line[128];
@@ -28,26 +31,22 @@ void shell_task() {
 
     VESA_print("KDXOS Shell Started.\n", COLOR_CYAN);
     VESA_print("> ", COLOR_YELLOW);
-    task_list[current_task_idx].has_drawn = 1; // Force the initial prompt to draw
+    
+    // Force the whole window to redraw
+    mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
 
     while(1) {
-        // Line wrap logic
         if (task_list[current_task_idx].cursor_x >= task_list[current_task_idx].win_w) {
             task_list[current_task_idx].cursor_x = 0;
             task_list[current_task_idx].cursor_y += 10;
         }
 
-        // keyboard_getchar() safely puts the Shell to sleep (0% CPU) 
-        // and instantly wakes it up the millisecond a key is pressed!
         char c = keyboard_getchar();
 
-        // --- NEW EXIT LOGIC ---
-        if (c == 4) { // Ctrl + D
-            // Call Syscall 4 (EXIT) to safely free the window and die
+        if (c == 4) { 
             __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
             while(1) yield();
         }
-        // ----------------------
 
         if (c == '\n') {
             line[idx] = '\0';
@@ -67,8 +66,7 @@ void shell_task() {
             VESA_print(str, COLOR_WHITE);
         }
         
-        // Tell the Compositor to push whatever we just did to the screen immediately!
-        task_list[current_task_idx].has_drawn = 1;  
+        mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
     }
 }
 
@@ -79,11 +77,12 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
             task_list[i].name[15] = '\0';
             task_list[i].total_ticks = 0;
             task_list[i].sleep_ticks = 0;
-            task_list[i].has_drawn = 0;
+            task_list[i].is_dirty = 0; 
             task_list[i].has_window = 0;
             task_list[i].window_buffer = NULL;
+            task_list[i].kbd_head = 0; 
+            task_list[i].kbd_tail = 0;
 
-            // FIX #1: INCREASED STACK TO 16KB TO PREVENT REBOOTS!
             uint32_t stack_size = 16384; 
             void* raw_stack = kmalloc(stack_size + 0x1000);
             if (!raw_stack) return -1;
@@ -97,7 +96,6 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
                 aligned_stack += 0x1000;
             }
 
-            // POINT TO THE NEW 16KB ROOF
             uint32_t* s_ptr = (uint32_t*)(aligned_stack + stack_size);
             *--s_ptr = 0x10;
             uint32_t task_stack_top = (uint32_t)s_ptr;
@@ -134,6 +132,7 @@ void kill_task(int id) {
         int full_h = task_list[id].win_h + title_bar + border;
         VESA_clear_region(task_list[id].win_x, task_list[id].win_y, full_w, full_h);
         vesa_updating = 1;
+        vesa_dirty = 1;
         VESA_flip();
         vesa_updating = 0;
         if (task_list[id].window_buffer) {
@@ -146,21 +145,21 @@ void kill_task(int id) {
     if (task_list[id].stack_ptr) { kfree(task_list[id].stack_ptr); task_list[id].stack_ptr = NULL; }
     if (task_list[id].code_ptr)  { kfree(task_list[id].code_ptr);  task_list[id].code_ptr  = NULL; }
     task_list[id].has_window = 0;
-    task_list[id].has_drawn  = 0;
+    task_list[id].is_dirty   = 0; 
 }
 
 void idle_task_code() {
     while(1) __asm__ volatile("hlt");
 }
 
-
 int get_current_task_id() { return current_task_idx; }
 int task_is_ready(int id) { return (id >= 0 && id < MAX_TASKS) ? (task_list[id].state == 1) : 0; }
 uint32_t task_get_esp(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].esp : 0; }
 char* task_get_name(int id) { return (id >= 0 && id < MAX_TASKS) ? (char*)task_list[id].name : "unused"; }
-int task_get_state(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].state : -1; }
-int task_get_sleep_ticks(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].sleep_ticks : -1; }
-int task_get_total_ticks(int id) { return (id >= 0 && id < MAX_TASKS) ? task_list[id].total_ticks : -1; }
+
+int task_get_state(int id) { return (id >= 0 && id < MAX_TASKS) ? (int)task_list[id].state : -1; }
+int task_get_sleep_ticks(int id) { return (id >= 0 && id < MAX_TASKS) ? (int)task_list[id].sleep_ticks : -1; }
+int task_get_total_ticks(int id) { return (id >= 0 && id < MAX_TASKS) ? (int)task_list[id].total_ticks : -1; }
 
 void task_timer() {
     uint32_t seconds = 0;
@@ -190,6 +189,7 @@ void task_game() {
     int exit = 0;
 
     VESA_draw_char('*', x, y, 0x00FFFF);
+    vesa_dirty = 1;
     VESA_flip();
 
     while (exit == 0) {
@@ -213,6 +213,7 @@ void task_game() {
             task_list[current_task_idx].last_x  = x + 8;
             task_list[current_task_idx].last_y  = y + 8;
             vesa_updating = 0;
+            vesa_dirty = 1;
             VESA_flip();
         } else {
             yield();
@@ -255,6 +256,7 @@ void run_top() {
         }
 
         vesa_updating = 0;
+        vesa_dirty = 1;
         VESA_flip();
 
         if (has_key_in_buffer()) {
@@ -267,6 +269,7 @@ void run_top() {
     VESA_clear_buffer_only();
     keyboard_focus_tid = previous_focus;
     kprintf_unsync("Returned to Shell.\n");
+    vesa_dirty = 1;
     VESA_flip();
 }
 
@@ -302,9 +305,8 @@ void task_create_window(int tid, int x, int y, int w, int h) {
     task_list[tid].win_x = x;
     task_list[tid].win_y = y;
     
-    // SAFETY: Never allow a window width/height of 0. Default to screen size temporarily.
-    task_list[tid].win_w = (w == 0) ? mbi->framebuffer_width : w;
-    task_list[tid].win_h = (h == 0) ? mbi->framebuffer_height : h;
+    task_list[tid].win_w = (w == 0) ? (int)mbi->framebuffer_width : w;
+    task_list[tid].win_h = (h == 0) ? (int)mbi->framebuffer_height : h;
     
     task_list[tid].cursor_x = 0;
     task_list[tid].cursor_y = 0;
@@ -322,19 +324,14 @@ void task_create_window(int tid, int x, int y, int w, int h) {
         task_list[tid].window_buffer[p] = 0x222222;
     }
     
-    // FIX: Force the tiling manager to split the screen RIGHT NOW, 
-    // before the new task has a chance to execute and draw out of bounds!
     refresh_tiling_layout();
-    
-    task_list[tid].has_drawn = 1;
+    mark_task_dirty(tid, 0, 0, 4000, 4000); 
 }
 
 void run_startup_tests() {
     VESA_print("\n--- Running KDXOS System Diagnostics ---\n", 0x00FFFF);
+    vesa_dirty = 1; VESA_flip(); 
 
-    // ==========================================
-    // INFO: SYSTEM HARDWARE
-    // ==========================================
     struct multiboot_info* mbi = VESA_get_boot_info();
     char num_buf[16];
     
@@ -345,13 +342,10 @@ void run_startup_tests() {
     itoa(mbi->framebuffer_height, num_buf, 10);
     VESA_print(num_buf, 0xFF0000);
     VESA_print("\n", 0xFFFFFF);
+    vesa_dirty = 1; VESA_flip();
 
-    // ==========================================
-    // TEST 1: KERNEL HEAP ALLOCATOR (kheap)
-    // ==========================================
     VESA_print("[TEST] KHeap Integrity & Splitting... ", 0xFFFFFF);
     
-    // 1. Allocate three adjacent blocks
     uint32_t* ptr1 = (uint32_t*)kmalloc(1024);
     uint32_t* ptr2 = (uint32_t*)kmalloc(2048);
     uint32_t* ptr3 = (uint32_t*)kmalloc(4096);
@@ -359,17 +353,12 @@ void run_startup_tests() {
     if (!ptr1 || !ptr2 || !ptr3) {
         VESA_print("FAIL (Out of Memory)\n", 0xFF0000);
     } else {
-        // 2. Write Magic Numbers to ensure no overlaps
         ptr1[0] = 0xDEADBEEF;
         ptr2[0] = 0xCAFEBABE;
         ptr3[0] = 0x12345678;
 
         if (ptr1[0] == 0xDEADBEEF && ptr2[0] == 0xCAFEBABE && ptr3[0] == 0x12345678) {
-            
-            // 3. Test the "Healer Split" logic
-            kfree(ptr2); // Free the 2048-byte middle block
-            
-            // Request 1024 bytes. It should split the old ptr2 block and give us the exact same address back!
+            kfree(ptr2); 
             uint32_t* ptr2_half = (uint32_t*)kmalloc(1024);
             
             if ((uint32_t)ptr2_half == (uint32_t)ptr2) {
@@ -381,31 +370,23 @@ void run_startup_tests() {
         } else {
             VESA_print("FAIL (Memory Corruption Detected)\n", 0xFF0000);
         }
-        
-        // 4. Free remaining blocks to test coalescing
         kfree(ptr1);
         kfree(ptr3);
     }
+    vesa_dirty = 1; VESA_flip();
 
-    // ==========================================
-    // TEST 2: FAT FILESYSTEM (Read/Write/Search)
-    // ==========================================
     VESA_print("[TEST] FAT Disk I/O & Persistence...  ", 0xFFFFFF);
     
     char test_file[] = "DIAG.TXT";
     char test_data[] = "KDXOS_HARD_DISK_INTEGRITY_CHECK_PASS";
 
-    // 1. Create and Write
     fat_touch(test_file);
     fat_write_file(test_file, test_data);
 
-    // 2. Search for the newly created file
     struct fat_dir_entry* entry = fat_search(test_file);
     if (entry) {
-        // 3. Read it back from the IDE disk
         char* loaded = (char*)fat_load_file(entry);
         if (loaded) {
-            // 4. Verify contents byte-by-byte
             int match = 1;
             for (int i = 0; test_data[i] != '\0'; i++) {
                 if (loaded[i] != test_data[i]) { 
@@ -414,28 +395,26 @@ void run_startup_tests() {
                 }
             }
 
-            if (match) {
-                VESA_print("PASS\n", 0x00FF00);
-            } else {
-                VESA_print("FAIL (Data Mismatch/Corruption)\n", 0xFF0000);
-            }
+            if (match) VESA_print("PASS\n", 0x00FF00);
+            else VESA_print("FAIL (Data Mismatch/Corruption)\n", 0xFF0000);
 
             kfree(loaded);
         } else {
             VESA_print("FAIL (Could not load file data)\n", 0xFF0000);
         }
-        
-        // 5. Clean up so we don't clutter the disk on every boot
         fat_rm(test_file);
     } else {
         VESA_print("FAIL (File Creation Error)\n", 0xFF0000);
     }
 
     VESA_print("--- Diagnostics Complete ---\n\n", 0x00FFFF);
+    vesa_dirty = 1; VESA_flip(); 
     sleep(2000);
 }
 
 void init_multitasking() {
+    __asm__ volatile("cli"); 
+
     multitasking_enabled = 1;
 
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -449,25 +428,20 @@ void init_multitasking() {
     }
 
     task_list[0].state = 1;
-    kstrncpy((char*)task_list[0].name, "shell", 15);
-    keyboard_focus_tid = 0;
-    task_create_window(0, 50, 50, 600, 400);
+    kstrncpy((char*)task_list[0].name, "kernel", 15);
 
-    // --- THE WALLPAPER INIT LOGIC ---
     struct multiboot_info* mbi = VESA_get_boot_info();
     uint32_t full_size = mbi->framebuffer_width * mbi->framebuffer_height;
     
-    // Allocate memory for the desktop background
     desktop_bg_buffer = (uint32_t*)kmalloc(full_size * 4);
-    
     if (desktop_bg_buffer) {
-        // Fill it with a fallback color (dark gray) in case the BMP fails to load
         for(uint32_t p = 0; p < full_size; p++) desktop_bg_buffer[p] = 0x111111;
-
-        // Load the image! (Make sure you put BG.BMP on your drive!)
         load_desktop_wallpaper("BG.BMP");
     }
-    // --------------------------------
+
+    int shell_tid = spawn_task(shell_task, NULL, "shell");
+    task_create_window(shell_tid, 0, 0, 0, 0);
+    keyboard_focus_tid = shell_tid;
 
     spawn_task(idle_task_code, NULL, "idle");
     spawn_task(compositor_task, NULL, "wm");
@@ -475,6 +449,8 @@ void init_multitasking() {
 
     current_task_idx = 0;
     refresh_tiling_layout();
+
+    __asm__ volatile("sti"); 
 }
 
 void compositor_task() {
@@ -484,111 +460,153 @@ void compositor_task() {
     uint32_t* b_buffer = VESA_get_back_buffer();
     int last_gui_count = -1; 
 
+    if (desktop_bg_buffer) {
+        kmemcpy32(b_buffer, desktop_bg_buffer, sw * sh);
+    } else {
+        for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
+    }
+    vesa_dirty = 1;
+    VESA_flip();
+
     while(1) {
         if (vesa_updating) { yield(); continue; }
 
-        // --- THE DEFERRED SPAWNER ---
         if (pending_shell_spawn) {
             pending_shell_spawn = 0;
+            __asm__ volatile("cli"); 
             int new_tid = spawn_task(shell_task, NULL, "shell");
             if (new_tid != -1) {
-                // Create the window (the compositor will resize it automatically!)
                 task_create_window(new_tid, 0, 0, 0, 0);
-                
-                // Automatically give focus to the new terminal
                 keyboard_focus_tid = new_tid; 
             }
+            __asm__ volatile("sti"); 
         }
-        // ----------------------------
 
         int gui_tasks = 0;
         int needs_update = 0;
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_list[i].state != 0 && task_list[i].has_window) {
                 gui_tasks++;
-                if (task_list[i].has_drawn) needs_update = 1;
+                if (task_list[i].is_dirty) needs_update = 1;
             }
         }
 
+        // --- FULL REDRAW ---
         if (gui_tasks != last_gui_count) {
-            needs_update = 1;
             last_gui_count = gui_tasks;
             refresh_tiling_layout();
-        }
+            
+            if (desktop_bg_buffer) kmemcpy32(b_buffer, desktop_bg_buffer, sw * sh);
+            else for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
 
-        if (!needs_update) { 
-            // FIX: Yield instead of sleep to prevent input lag!
-            yield(); 
-            continue; 
-        }
-
-        if (gui_tasks == 0) {
-            // --- DRAW DESKTOP BACKGROUND ---
-            if (desktop_bg_buffer) {
-                kmemcpy32(b_buffer, desktop_bg_buffer, sw * sh);
-            } else {
-                VESA_draw_rect(0, 0, sw, sh, 0x000033);
-            }
-        } else {
-            // --- DRAW DESKTOP BACKGROUND (BEHIND WINDOWS) ---
-            if (desktop_bg_buffer) {
-                kmemcpy32(b_buffer, desktop_bg_buffer, sw * sh);
-            } else {
-                for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
-            }
-
-            int tile_width = sw / gui_tasks;
+            int tile_width = (gui_tasks > 0) ? sw / gui_tasks : sw;
             int current_tile = 0;
-            int border_thickness = 2; // A crisp, clean 2-pixel border
+            int border_thickness = 2;
 
             for (int i = 0; i < MAX_TASKS; i++) {
-                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer != NULL) {
-                    
+                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer) {
                     int start_x = current_tile * tile_width;
-                    int current_tile_w = tile_width;
+                    int current_tile_w = (current_tile == gui_tasks - 1) ? (int)(sw - start_x) : tile_width;
 
-                    // Ensure the last tile stretches perfectly to the right wall
-                    if (current_tile == gui_tasks - 1) {
-                        current_tile_w = sw - start_x;
-                    }
-
-                    // 1. Blit the actual window contents seamlessly
                     for (uint32_t y = 0; y < sh; y++) {
-                        uint32_t* src = &task_list[i].window_buffer[y * sw];
-                        uint32_t* dst = &b_buffer[y * sw + start_x];
-                        kmemcpy32(dst, src, current_tile_w);
+                        kmemcpy32(&b_buffer[y * sw + start_x], 
+                                  &task_list[i].window_buffer[y * sw], 
+                                  current_tile_w);
                     }
 
-                    // 2. THE TWM BORDER LOGIC
-                    // Active window gets Bright Cyan, Inactive gets Dark Gray
                     uint32_t border_color = (i == keyboard_focus_tid) ? 0x00FFFF : 0x444444;
-
-                    // Draw Top & Bottom Edges
                     for (int by = 0; by < border_thickness; by++) {
                         for (int bx = 0; bx < current_tile_w; bx++) {
-                            b_buffer[(by) * sw + start_x + bx]          = border_color; // Top
-                            b_buffer[(sh - 1 - by) * sw + start_x + bx] = border_color; // Bottom
+                            b_buffer[(by) * sw + start_x + bx] = border_color;
+                            b_buffer[(sh - 1 - by) * sw + start_x + bx] = border_color;
                         }
                     }
-                    
-                    // Draw Left & Right Edges
                     for (uint32_t by = 0; by < sh; by++) {
                         for (int bx = 0; bx < border_thickness; bx++) {
-                            b_buffer[by * sw + start_x + bx]                      = border_color; // Left
-                            b_buffer[by * sw + start_x + current_tile_w - 1 - bx] = border_color; // Right
+                            b_buffer[by * sw + start_x + bx] = border_color;
+                            b_buffer[by * sw + start_x + current_tile_w - 1 - bx] = border_color;
                         }
                     }
-
-                    task_list[i].has_drawn = 0;
+                    task_list[i].is_dirty = 0;
                     current_tile++;
                 }
             }
+            
+            vesa_dirty = 1;
+            VESA_flip();
+            yield();
+            continue;
+        }
+
+        // --- FAST PATH (BATCHED) ---
+        if (needs_update) {
+            int tile_width = (gui_tasks > 0) ? sw / gui_tasks : sw;
+            int current_tile = 0;
+
+            // Initialize Master Bounding Box parameters
+            int min_x = sw, min_y = sh, max_x = 0, max_y = 0;
+            int did_draw = 0;
+
+            for (int i = 0; i < MAX_TASKS; i++) {
+                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer) {
+                    
+                    if (task_list[i].is_dirty) {
+                        
+                        int dx = task_list[i].dirty_x;
+                        int dy = task_list[i].dirty_y;
+                        int dw = task_list[i].dirty_w;
+                        int dh = task_list[i].dirty_h;
+                        
+                        task_list[i].is_dirty = 0;
+
+                        int start_x = current_tile * tile_width;
+                        int current_tile_w = (current_tile == gui_tasks - 1) ? (int)(sw - start_x) : tile_width;
+                        if (dx + dw > current_tile_w) dw = current_tile_w - dx;
+                        if (dy + dh > (int)sh) dh = sh - dy;
+
+                        if (dw > 0 && dh > 0) {
+                            for (int row = 0; row < dh; row++) {
+                                int win_offset = ((dy + row) * sw) + dx;
+                                int b_buffer_offset = ((dy + row) * sw) + (start_x + dx);
+                                kmemcpy32(&b_buffer[b_buffer_offset], 
+                                          &task_list[i].window_buffer[win_offset], 
+                                          dw);
+                            }
+
+                            uint32_t border_color = (i == keyboard_focus_tid) ? 0x00FFFF : 0x444444;
+                            int border_thickness = 2;
+                            for (int by = 0; by < border_thickness; by++) {
+                                for (int bx = 0; bx < current_tile_w; bx++) {
+                                    b_buffer[(by) * sw + start_x + bx] = border_color;
+                                    b_buffer[(sh - 1 - by) * sw + start_x + bx] = border_color;
+                                }
+                            }
+                            for (uint32_t by = 0; by < sh; by++) {
+                                for (int bx = 0; bx < border_thickness; bx++) {
+                                    b_buffer[by * sw + start_x + bx] = border_color;
+                                    b_buffer[by * sw + start_x + current_tile_w - 1 - bx] = border_color;
+                                }
+                            }
+
+                            // EXPAND THE MASTER BOUNDING BOX
+                            if (start_x < min_x) min_x = start_x;
+                            if (0 < min_y) min_y = 0; // Borders touch Y=0
+                            if (start_x + current_tile_w > max_x) max_x = start_x + current_tile_w;
+                            if ((int)sh > max_y) max_y = sh; // Borders touch Y=sh
+                            
+                            did_draw = 1;
+                        }
+                    }
+                    current_tile++;
+                }
+            }
+            
+            // PERFORM ONE SINGLE UNIFIED VESA UPDATE
+            if (did_draw) {
+                VESA_update_rect(min_x, min_y, max_x - min_x, max_y - min_y);
+            }
         }
         
-        vesa_dirty = 1; 
-        VESA_flip();
-        
-        // FIX: Yield instead of sleep to run at max FPS!
         yield();
     }
 }
@@ -596,30 +614,22 @@ void compositor_task() {
 void klog_daemon() {
     while(1) {
         if (klog_needs_sync) {
-            // Check if file exists, if not, create it
             if (!fat_search("KDX.LOG")) {
                 fat_touch("KDX.LOG");
             }
-            
-            // Note: For now, we overwrite the log with the latest buffer.
-            // Professional OSs would 'append' to the cluster chain.
-            fat_write_file("KDX.LOG", klog_ram_buffer);
-            
+            fat_append_file("KDX.LOG", klog_ram_buffer);
+            kmemset(klog_ram_buffer, 0, 1024);
             klog_needs_sync = 0;
-            // Optional: Print a small notification in the corner
-            // VESA_draw_rect(0, 758, 150, 10, 0x00FF00); 
         }
-        sleep(2000); // Check for new logs every 2 seconds
+        sleep(2000); 
     }
 }
+
 void suicide_task() {
     VESA_print_at("Crash Task: I'm about to die...", 100, 100, 0xFFFF00);
-    sleep(2000); // Give us a moment to see it
+    sleep(2000); 
 
-    // TRIGGER: General Protection Fault (INT 13) 
-    // Trying to execute a privileged instruction or bad segment
     __asm__ volatile("mov $0xFFFF, %%ax; mov %%ax, %%ds" : : : "eax");
 
-    // The CPU will never reach this line
     while(1) yield();
 }

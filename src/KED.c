@@ -10,6 +10,9 @@ extern uint32_t system_ticks;
 extern int current_task_idx;
 extern volatile struct task task_list[]; 
 
+// Link our dirty tracker helper
+extern void mark_task_dirty(int id, int x, int y, int w, int h);
+
 static char ked_target_file[16];
 
 void KED_init(const char* filename) {
@@ -22,133 +25,127 @@ void KED_task() {
     
     char* text_buffer = (char*)kmalloc(4096);
     if (!text_buffer) {
-        // Safe exit via Syscall 4 (EXIT)
         __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
         while(1) yield();
     }
-    
-    // Fill the 4KB buffer with null terminators
-    kmemset(text_buffer, 0, 4096 / 4);
+    kmemset(text_buffer, 0, 1024); // 4096 bytes
 
     struct fat_dir_entry* entry = fat_search(ked_target_file);
-    uint32_t cursor_pos = 0;
+    uint32_t total_len = 0;
     
     if (entry) {
         char* loaded_data = fat_load_file(entry);
         if (loaded_data) {
-            // Leave at least 1 byte for the null terminator
-            uint32_t to_copy = (entry->size > 4095) ? 4095 : entry->size;
-            kmemcpy(text_buffer, loaded_data, to_copy);
-            cursor_pos = to_copy;
+            total_len = (entry->size > 4094) ? 4094 : entry->size;
+            kmemcpy(text_buffer, loaded_data, total_len);
             kfree(loaded_data);
         }
     } else {
         fat_touch(ked_target_file);
     }
 
-    // --- ANTI-BLINK VARIABLES ---
+    uint32_t cursor_index = total_len; // Logical position in the text
     int needs_redraw = 1;
     int last_cursor_state = -1;
 
     while (1) {
-        // --- OOM SAFETY CHECK ---
-        // If the OS failed to allocate a window buffer due to low memory, 
-        // abort the application so it doesn't fight the Compositor!
-        if (task_list[current_task_idx].has_window == 0) {
-            __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
-            while(1) yield();
-        }
-        // ------------------------
+        if (has_key_in_buffer()) {
+            char c = get_key_from_buffer();
+            needs_redraw = 1;
 
-        // SAFETY: Wait for the compositor to give us a real width
-        if (task_list[current_task_idx].win_w == 0) {
-            yield();
-            continue;
+            if (c == 17) break; // Ctrl+Q
+            if (c == 19) {      // Ctrl+S
+                fat_write_file(ked_target_file, text_buffer);
+                break;
+            }
+
+            // --- NAVIGATION ---
+            if (c == 13 && cursor_index > 0) { // LEFT
+                cursor_index--;
+            }
+            else if (c == 14 && cursor_index < total_len) { // RIGHT
+                cursor_index++;
+            }
+            else if (c == 11) { // UP (Find previous newline)
+                if (cursor_index > 0) {
+                    int i = cursor_index - 1;
+                    while (i > 0 && text_buffer[i] != '\n') i--;
+                    cursor_index = i;
+                }
+            }
+            else if (c == 12) { // DOWN (Find next newline)
+                int i = cursor_index;
+                while (i < (int)total_len && text_buffer[i] != '\n') i++;
+                if (i < (int)total_len) cursor_index = i + 1;
+            }
+
+            // --- DELETION ---
+            else if (c == '\b' && cursor_index > 0) {
+                // Shift memory left: [A B C | D E] -> [A B | D E]
+                for (uint32_t i = cursor_index - 1; i < total_len; i++) {
+                    text_buffer[i] = text_buffer[i + 1];
+                }
+                cursor_index--;
+                total_len--;
+            }
+
+            // --- INSERTION ---
+            else if ((c >= ' ' || c == '\n') && total_len < 4094) {
+                // Shift memory right to make a hole: [A B | C D] -> [A B _ C D]
+                for (uint32_t i = total_len; i > cursor_index; i--) {
+                    text_buffer[i] = text_buffer[i - 1];
+                }
+                text_buffer[cursor_index] = c;
+                cursor_index++;
+                total_len++;
+                text_buffer[total_len] = '\0';
+            }
         }
 
-        // 1. Check if the cursor needs to blink
-        int current_cursor_state = (system_ticks / 20) % 2;
+        // --- RENDERING ---
+        int current_cursor_state = (system_ticks / 500) % 2;
         if (current_cursor_state != last_cursor_state) {
             needs_redraw = 1;
             last_cursor_state = current_cursor_state;
         }
 
-        // 2. ONLY draw if something actually changed!
         if (needs_redraw) {
-            
-            // --- THE ATOMIC SHIELD ---
-            // Lock out the hardware timer. The Compositor cannot interrupt us now.
             __asm__ volatile("cli");
-
             VESA_clear_buffer_only();
             
-            // Use VESA_print_unsync directly to avoid vsprintf buffer overflows!
             VESA_print_unsync("KED Editor - Editing: ", 0xFFFFFF);
             VESA_print_unsync(ked_target_file, 0x00FFFF);
-            VESA_print_unsync("\nCtrl+S: Save & Exit | Ctrl+Q: Cancel\n", 0xAAAAAA);
+            VESA_print_unsync("\nArrows: Move | Ctrl+S: Save | Ctrl+Q: Exit\n", 0xAAAAAA);
             VESA_print_unsync("-------------------------------------------\n", 0x888888);
             
-            // Safely print the massive buffer directly to the screen
+            // Print text before cursor
+            char saved = text_buffer[cursor_index];
+            text_buffer[cursor_index] = '\0';
             VESA_print_unsync(text_buffer, 0xFFFFFF);
-            
+            text_buffer[cursor_index] = saved;
+
+            // Draw Cursor
             if (current_cursor_state == 0) {
-                VESA_print_unsync("_", 0xFFFFFF);
+                VESA_print_unsync("_", 0x00FFFF);
+            } else {
+                char blink[2] = { (saved ? (saved == '\n' ? ' ' : saved) : ' '), '\0' };
+                VESA_print_unsync(blink, 0xFFFFFF);
             }
 
-            task_list[current_task_idx].has_drawn = 1;
-            needs_redraw = 0; // Reset flag so we don't draw next frame
+            // Print text after cursor (adjusting for the character we highlighted)
+            if (saved != '\0') {
+                VESA_print_unsync(&text_buffer[cursor_index + (current_cursor_state == 0 ? 0 : 1)], 0xFFFFFF);
+            }
 
-            // --- LOWER THE SHIELD ---
-            // Allow the OS scheduler to tick again.
+            mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
+            needs_redraw = 0;
             __asm__ volatile("sti");
         }
-
-        // 3. Handle Input
-        if (has_key_in_buffer()) {
-            char c = get_key_from_buffer();
-            
-            needs_redraw = 1; // A key was pressed! Force a redraw!
-
-            if (c == 17) { // Ctrl + Q (Cancel)
-                break;
-            }
-            if (c == 19) { // Ctrl + S (Save)
-                fat_write_file(ked_target_file, text_buffer);
-                break; 
-            }
-            if (c == 16) { // Ctrl + P (Paste test block)
-                uint32_t paste_size = 512;
-                if (cursor_pos + paste_size < 4094) {
-                    for (uint32_t i = 0; i < paste_size; i++) {
-                        text_buffer[cursor_pos++] = 'H';
-                    }
-                    text_buffer[cursor_pos] = '\0';
-                }
-                continue;
-            }
-            if (c == '\b' && cursor_pos > 0) {
-                text_buffer[--cursor_pos] = '\0';
-            } 
-            else if (c >= ' ' || c == '\n') {
-                if (cursor_pos < 4094) {
-                    text_buffer[cursor_pos++] = c;
-                    text_buffer[cursor_pos] = '\0';
-                }
-            }
-        }
-        
         yield(); 
     }
 
-    // Free the heap data before exiting
     kfree(text_buffer);
-    
-    // Return keyboard focus to the Shell
-    keyboard_focus_tid = 0; 
-    
-    // Call Syscall 4 (EXIT) to let the Kernel safely reap the task
+    keyboard_focus_tid = 1; 
     __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
-    
-    // Wait for the scheduler to swap us out permanently
     while(1) yield(); 
 }

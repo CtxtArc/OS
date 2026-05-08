@@ -5,6 +5,7 @@
 #define MAX_TASKS 10
 #define STACK_SIZE 4096
 #define TASK_KBD_BUF_SIZE 64
+
 struct task {
     uint32_t esp;
     uint32_t state; // 0 = empty, 1 = ready, 2 = sleep, 3 = blocked 
@@ -15,10 +16,19 @@ struct task {
     int last_y; // Track the Y coordinate used in syscall
     int first_x; // Track the Y coordinate used in syscall
     int first_y; // Track the Y coordinate used in syscall
-    int has_drawn; // Boolean flag: did this task ever print?
+    
+    // --- DIRTY RECTANGLE TRACKING ---
+    int is_dirty; // Replaces has_drawn
+    int dirty_x;
+    int dirty_y;
+    int dirty_w;
+    int dirty_h;
+    // --------------------------------
+    
     void* stack_ptr; // Store this so we can kfree it!
     void* code_ptr;  // Store this so we can kfree it!
     uint32_t total_ticks; // Accumulated CPU time
+    
     // --- Private Keyboard Mailbox ---
     char kbd_buffer[TASK_KBD_BUF_SIZE];
     uint8_t kbd_head;
@@ -59,7 +69,6 @@ extern int vesa_dirty; // Useful for the shell to trigger refreshes
 
 void klog_daemon();
 void run_startup_tests();
-void klog_daemon();
 void compositor_task();
 
 void suicide_task();

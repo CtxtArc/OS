@@ -286,12 +286,11 @@ void hexdump(void* ptr, int size) {
 }
 
 void sleep(int ms) {
-    uint32_t end = system_ticks + (ms / (1000 / timer_frequency));
+    uint32_t end = system_ticks + ms; 
     while (system_ticks < end) {
-        __asm__ volatile("hlt"); // Wait for next interrupt
+        yield(); // Call it as a C function, not assembly!
     }
 }
-
 int kstrcasecmp(const char* s1, const char* s2) {
     while (*s1 && *s2) {
         char c1 = *s1;
