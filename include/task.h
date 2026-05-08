@@ -57,7 +57,10 @@ void task_create_window(int tid, int x, int y, int w, int h);
 extern volatile struct task task_list[MAX_TASKS]; 
 extern int vesa_dirty; // Useful for the shell to trigger refreshes
 
+void klog_daemon();
 void run_startup_tests();
-
+void klog_daemon();
 void compositor_task();
+
+void suicide_task();
 #endif

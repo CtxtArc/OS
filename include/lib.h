@@ -14,3 +14,5 @@ void kprintf_unsync(const char* format, ...);
 int kstrcasecmp(const char* s1, const char* s2); 
 const char* get_token(const char* line, char* token_out); 
 uint32_t katoh(const char* s); 
+void klog_append(const char* msg); 
+char* kstrcat(char* dest, const char* src);

@@ -2,8 +2,25 @@
 #include <stdarg.h>
 #include "lib.h"
 #include <stddef.h>
+
+#define KLOG_BUF_SIZE 4096
+
+
 extern int timer_frequency;
 
+ char klog_ram_buffer[KLOG_BUF_SIZE];
+volatile int klog_needs_sync = 0; 
+
+void klog_append(const char* msg) {
+    // Simple append logic for the RAM buffer
+    static uint32_t p = 0;
+    for (int i = 0; msg[i] != '\0'; i++) {
+        klog_ram_buffer[p++] = msg[i];
+        if (p >= KLOG_BUF_SIZE - 1) p = 0; // Wrap around
+    }
+    klog_ram_buffer[p] = '\0';
+    klog_needs_sync = 1; 
+}
 int kstrcmp(const char* a, const char* b) {
     while (*a && (*a == *b)) {
         a++;
@@ -312,4 +329,18 @@ uint32_t katoh(const char* s) {
         res = (res << 4) | (val & 0xF);
     }
     return res;
+}
+char* kstrcat(char* dest, const char* src) {
+    // 1. Move the pointer to the end of the destination string
+    char* ptr = dest + kstrlen(dest);
+
+    // 2. Copy src to the end of dest
+    while (*src != '\0') {
+        *ptr++ = *src++;
+    }
+
+    // 3. Add the null terminator
+    *ptr = '\0';
+
+    return dest;
 }

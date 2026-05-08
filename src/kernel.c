@@ -32,7 +32,7 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
 
     // 3. Hardware / Graphics
     VESA_init(mbi);
-    timer_init(100);  
+    timer_init(1000);  
 
     // 4. Filesystem & Tasks
     fat_init();

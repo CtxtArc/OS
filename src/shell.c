@@ -50,6 +50,10 @@ void execute_command(char* input) {
     if (kstrcmp(input, "HELP") == 0) {
         VESA_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL SLEEP RUN TOP UPTIME REBOOT CRASH ECHO SET_FPS TIMER GAME HEXDUMP WRITE COMPILE KED\n", COLOR_WHITE);
     }
+  else if (kstrcmp(input, "SUICIDE") == 0) {
+        kprintf("Spawning SUICIDE task... watch the logs.\n");
+        spawn_task(suicide_task,NULL, "suicide_app");
+    }
     else if (kstrcmp(input, "PS") == 0) {
         VESA_print("TID    NAME          STATE\n", COLOR_CYAN);
         for (int i = 0; i < MAX_TASKS; i++) {

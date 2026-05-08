@@ -18,6 +18,9 @@ extern volatile uint32_t system_ticks;
 int multitasking_enabled = 0;
 volatile struct task task_list[MAX_TASKS];
 int current_task_idx = 0;
+extern volatile int klog_needs_sync;
+extern char klog_ram_buffer[];
+
 
 void shell_task() {
     char line[128];
@@ -468,6 +471,7 @@ void init_multitasking() {
 
     spawn_task(idle_task_code, NULL, "idle");
     spawn_task(compositor_task, NULL, "wm");
+    spawn_task(klog_daemon, NULL, "log_daemon");
 
     current_task_idx = 0;
     refresh_tiling_layout();
@@ -587,4 +591,35 @@ void compositor_task() {
         // FIX: Yield instead of sleep to run at max FPS!
         yield();
     }
+}
+
+void klog_daemon() {
+    while(1) {
+        if (klog_needs_sync) {
+            // Check if file exists, if not, create it
+            if (!fat_search("KDX.LOG")) {
+                fat_touch("KDX.LOG");
+            }
+            
+            // Note: For now, we overwrite the log with the latest buffer.
+            // Professional OSs would 'append' to the cluster chain.
+            fat_write_file("KDX.LOG", klog_ram_buffer);
+            
+            klog_needs_sync = 0;
+            // Optional: Print a small notification in the corner
+            // VESA_draw_rect(0, 758, 150, 10, 0x00FF00); 
+        }
+        sleep(2000); // Check for new logs every 2 seconds
+    }
+}
+void suicide_task() {
+    VESA_print_at("Crash Task: I'm about to die...", 100, 100, 0xFFFF00);
+    sleep(2000); // Give us a moment to see it
+
+    // TRIGGER: General Protection Fault (INT 13) 
+    // Trying to execute a privileged instruction or bad segment
+    __asm__ volatile("mov $0xFFFF, %%ax; mov %%ax, %%ds" : : : "eax");
+
+    // The CPU will never reach this line
+    while(1) yield();
 }

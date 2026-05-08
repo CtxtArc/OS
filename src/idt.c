@@ -47,94 +47,6 @@ void pic_remap() {
     outb(0x21, 0xFC); outb(0xA1, 0xFF);
 }
 
-void isr_handler(struct registers *r) {
-    // 1. Lock down the system
-    __asm__ volatile("cli");
-
-    // 2. Clear the screen to pure Red for a Kernel Panic!
-    VESA_draw_rect(0, 0, 1024, 768, 0xAA0000); 
-    
-    task_list[0].cursor_x = 10;
-    task_list[0].cursor_y = 10;
-
-    VESA_print("===================================================\n", 0xFFFFFF);
-    VESA_print("                 KERNEL PANIC                      \n", 0xFFFFFF);
-    VESA_print("===================================================\n\n", 0xFFFFFF);
-
-    // --- THE EXCEPTION DECODER ---
-    if (r->int_no == 14) {
-        uint32_t cr2;
-        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2)); // Read the bad address
-
-        VESA_print("EXCEPTION: PAGE FAULT (INT 14)\n\n", 0xFFFFFF);
-        VESA_print("A task tried to access unmapped or protected memory.\n\n", 0xDDDDDD);
-        
-        char buf[16];
-        VESA_print("Faulting Address (CR2): 0x", 0xFFFFFF);
-        itoa(cr2, buf, 16);
-        VESA_print(buf, 0x00FFFF);
-        VESA_print("\n", 0xFFFFFF);
-    } else {
-        VESA_print("EXCEPTION: ", 0xFFFFFF);
-        if (r->int_no < 16) VESA_print(exception_messages[r->int_no], 0xFFFFFF);
-        else VESA_print("Unknown", 0xFFFFFF);
-        VESA_print("\n", 0xFFFFFF);
-    }
-    // ------------------------------
-
-    // Print register state to help debugging
-    char hex_buf[16];
-    VESA_print("\nEIP: 0x", 0xAAAAAA); itoa(r->eip, hex_buf, 16); VESA_print(hex_buf, 0xFFFFFF);
-    VESA_print("  EAX: 0x", 0xAAAAAA); itoa(r->eax, hex_buf, 16); VESA_print(hex_buf, 0xFFFFFF);
-    VESA_print("  EBX: 0x", 0xAAAAAA); itoa(r->ebx, hex_buf, 16); VESA_print(hex_buf, 0xFFFFFF);
-
-    VESA_flip(); // Force the red screen to draw!
-
-    // --- THE GRACEFUL RECOVERY LOGIC ---
-    int id = current_task_idx;
-    
-    // We can only recover if an APP crashed (ID > 0). 
-    // If the core Shell (Task 0) or Kernel initialization crashes, we MUST halt.
-    if (id > 0 && task_list[id].state != 0) {
-        
-        sleep(3000); // Pause for 3 seconds so you can read the red screen!
-        
-        // 1. Mark task as dead and free its window buffer
-        task_list[id].state = 0; 
-        if (task_list[id].window_buffer) {
-            kfree(task_list[id].window_buffer);
-            task_list[id].window_buffer = NULL;
-        }
-        
-        // Force the Compositor to recalculate the remaining tiles
-        refresh_tiling_layout();
-
-        // 2. Reassign keyboard focus if the dying task had it
-        if (keyboard_focus_tid == id) {
-            int next = (id + 1) % MAX_TASKS;
-            while (next != id) {
-                if (task_list[next].state != 0 && task_list[next].has_window) {
-                    keyboard_focus_tid = next;
-                    task_list[next].has_drawn = 1; // Tell the new window to turn Cyan!
-                    break;
-                }
-                next = (next + 1) % MAX_TASKS;
-            }
-        }
-
-        // 3. HIJACK THE CPU!
-        // We overwrite the Return Instruction Pointer on the stack. 
-        // When our assembly stub calls `iret`, it will unknowingly boot into the Idle Task instead of the crashed app!
-        r->eip = (uint32_t)idle_task_code;
-        return; 
-        
-    } else {
-        // Critical Kernel Panic! (Task 0 or pre-multitasking crash)
-        VESA_print("\n\nCRITICAL KERNEL CRASH. System Halted.", 0xFF0000);
-        VESA_flip();
-        while(1) __asm__("hlt");
-    }
-}
 
 void idt_init() {
     idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
@@ -174,6 +86,97 @@ void timer_init(uint32_t frequency) {
 
 uint32_t next_stack_ptr = 0;
 extern uint32_t target_fps;
+
+void isr_handler(struct registers *r) {
+    __asm__ volatile("cli");
+    
+    // --- 1. PRESERVE SHELL UI STATE ---
+    int old_shell_x = task_list[0].cursor_x;
+    int old_shell_y = task_list[0].cursor_y;
+
+    // --- 2. DRAW PANIC SCREEN ---
+    VESA_draw_rect(0, 0, 1024, 768, 0xAA0000);
+    task_list[0].cursor_x = 10; 
+    task_list[0].cursor_y = 10;
+    VESA_print("===================================================\n", 0xFFFFFF);
+    VESA_print("             KDXOS EXCEPTION RECOVERY              \n", 0xFFFFFF);
+    VESA_print("===================================================\n\n", 0xFFFFFF);
+
+    // --- 3. LOGGING ---
+    char log_entry[256];
+    log_entry[0] = '\0'; 
+    kstrcat(log_entry, "\n[CRASH] Task: ");
+    itoa(current_task_idx, log_entry + kstrlen(log_entry), 10);
+    kstrcat(log_entry, " | Exception: ");
+    kstrcat(log_entry, exception_messages[r->int_no]);
+    kstrcat(log_entry, " | EIP: 0x");
+    char hex_addr[16];
+    itoa(r->eip, hex_addr, 16);
+    kstrcat(log_entry, hex_addr);
+    kstrcat(log_entry, "\n");
+    klog_append(log_entry);
+
+    VESA_print("EXCEPTION: ", 0xFFFFFF);
+    VESA_print(exception_messages[r->int_no], 0xFFFF00);
+    VESA_print("\nEIP: 0x", 0xAAAAAA); VESA_print(hex_addr, 0xFFFFFF);
+    
+    VESA_flip(); // Show the red screen
+
+    // --- 4. RECOVERY LOGIC ---
+    int id = current_task_idx;
+    if (id > 0) {
+        // Busy wait for 3 seconds
+        for(volatile uint32_t i = 0; i < 300000000; i++);
+        
+        // Restore Shell Cursor
+        task_list[0].cursor_x = old_shell_x;
+        task_list[0].cursor_y = old_shell_y;
+
+        // Kill Task
+        task_list[id].state = 0; 
+        if (task_list[id].window_buffer) {
+            kfree(task_list[id].window_buffer);
+            task_list[id].window_buffer = NULL;
+        }
+
+        // --- THE UI SNAP-BACK FIX ---
+        refresh_tiling_layout(); // Recalculate window sizes
+        
+        // Force all living tasks to redraw their windows to the backbuffer
+        for(int i = 0; i < MAX_TASKS; i++) {
+            if(task_list[i].state != 0) {
+                task_list[i].has_drawn = 1; 
+            }
+        }
+        
+        // Flip the buffer NOW so the Shell appears instantly 
+        // without waiting for a key press!
+        VESA_flip(); 
+
+        // --- 5. THE ESCAPE MANEUVER ---
+        int next = 0; 
+        current_task_idx = next;
+        uint32_t new_esp = task_list[next].esp;
+        
+        __asm__ volatile (
+            "mov %0, %%esp \n"
+            "pop %%eax     \n" 
+            "mov %%ax, %%ds\n"
+            "mov %%ax, %%es\n"
+            "popa          \n" 
+            "add $8, %%esp \n" 
+            "sti           \n"
+            "iret          \n"
+            : : "r" (new_esp)
+        );
+
+    } else {
+        // Kernel/Shell Panic
+        VESA_print("\n\nCRITICAL SYSTEM FAILURE. HALTING.", 0xFFFFFF);
+        VESA_flip();
+        while(1) __asm__ volatile("hlt");
+    }
+}
 
 void timer_handler(struct registers *regs) {
     system_ticks++;
