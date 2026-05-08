@@ -178,7 +178,10 @@ void task_timer() {
     while (1) {
         seconds++;
         char buf[20];
-        kmemset(buf, 0, 20);
+        
+        // FIX: Divide by 4 to safely clear 20 bytes
+        kmemset(buf, 0, 20 / 4); 
+        
         kstrcpy(buf, "TIMER: ");
         itoa(seconds, buf + 7, 10);
         VESA_print_at(buf, 900, 10, 0x00FFFF);
@@ -603,11 +606,13 @@ void compositor_task() {
 void klog_daemon() {
     while(1) {
         if (klog_needs_sync) {
-            if (!fat_search("KDX.LOG")) {
-                fat_touch("KDX.LOG");
-            }
+            struct fat_dir_entry* log_file = fat_search("KDX.LOG");
+            if (!log_file) fat_touch("KDX.LOG");
+            
             fat_append_file("KDX.LOG", klog_ram_buffer);
-            kmemset(klog_ram_buffer, 0, 1024);
+            
+            // FIX: Divide by 4 to safely clear the 1024-byte RAM buffer
+            kmemset(klog_ram_buffer, 0, 1024 / 4);
             klog_needs_sync = 0;
         }
         sleep(2000); 

@@ -49,71 +49,11 @@ void execute_command(char* input) {
 
     // --- SYSTEM & INFO ---
     if (kstrcmp(input, "HELP") == 0) {
-        VESA_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL SLEEP RUN TOP UPTIME REBOOT CRASH ECHO SET_FPS TIMER GAME HEXDUMP WRITE COMPILE KED\n", COLOR_WHITE);
+        VESA_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL SLEEP RUN TOP UPTIME STAT REBOOT CRASH ECHO SET_FPS TIMER GAME HEXDUMP WRITE COMPILE KED\n", COLOR_WHITE);
     }
     else if (kstrcmp(input, "SUICIDE") == 0) {
         kprintf("Spawning SUICIDE task... watch the logs.\n");
         spawn_task(suicide_task,NULL, "suicide_app");
-    }
-else if (kstrcmp(input, "STAT") == 0) {
-        VESA_print("--- KERNEL HEAP STATISTICS ---\n", COLOR_CYAN);
-        
-        // Call the kheap function which currently uses kprintf (serial out)
-        // We need to route that data to VESA so you can see it in the shell window.
-        
-        extern header_t* heap_start; // Bring in the heap start pointer
-        #define HEAP_INITIAL_SIZE (64 * 1024 * 1024) 
-        
-        if (!heap_start) {
-            VESA_print("Heap is not initialized.\n", COLOR_RED);
-        } else {
-            uint32_t free_mem = 0; 
-            uint32_t used_mem = 0;
-            uint32_t blocks = 0;
-            
-            header_t* curr = heap_start;
-            uint32_t heap_limit = (uint32_t)heap_start + HEAP_INITIAL_SIZE; 
-            
-            while (curr != NULL) {
-                if ((uint32_t)curr < (uint32_t)heap_start || (uint32_t)curr >= heap_limit) {
-                    VESA_print("Error: Heap linked-list corrupted!\n", COLOR_RED);
-                    break;
-                }
-
-                if (curr->is_free) free_mem += curr->size;
-                else used_mem += curr->size;
-                
-                blocks++;
-
-                if (curr->size == 0 && curr->next != NULL) {
-                    VESA_print("Error: Zero-size block detected.\n", COLOR_RED);
-                    break;
-                }
-                curr = curr->next;
-            }
-
-            char buf[32];
-            
-            VESA_print("Total Blocks: ", COLOR_WHITE);
-            itoa(blocks, buf, 10);
-            VESA_print(buf, COLOR_YELLOW);
-            VESA_print("\n", COLOR_WHITE);
-
-            VESA_print("Used Memory:  ", COLOR_WHITE);
-            itoa(used_mem / 1024, buf, 10); // Convert to KB
-            VESA_print(buf, COLOR_YELLOW);
-            VESA_print(" KB\n", COLOR_WHITE);
-
-            VESA_print("Free Memory:  ", COLOR_WHITE);
-            itoa(free_mem / 1024, buf, 10); // Convert to KB
-            VESA_print(buf, COLOR_GREEN);
-            VESA_print(" KB\n", COLOR_WHITE);
-            
-            // Helpful warning if free memory drops below 4MB
-            if (free_mem < 4194304) {
-                VESA_print("WARNING: Low Heap Memory! Close windows or REBOOT.\n", COLOR_RED);
-            }
-        }
     }
     else if (kstrcmp(input, "PS") == 0) {
         VESA_print("TID    NAME          STATE\n", COLOR_CYAN);
@@ -134,15 +74,65 @@ else if (kstrcmp(input, "STAT") == 0) {
     }
     else if (kstrcmp(input, "UPTIME") == 0) {
         char buf[32];
-        uint32_t s = system_ticks / 1000; // Adjusted for 1000Hz timer!
+        uint32_t s = system_ticks / 1000; 
         VESA_print("Uptime: ", COLOR_WHITE);
         itoa(s, buf, 10);
         VESA_print(buf, COLOR_CYAN);
         VESA_print("s\n", COLOR_WHITE);
     }
+    else if (kstrcmp(input, "STAT") == 0) {
+        VESA_print("--- KERNEL HEAP STATISTICS ---\n", COLOR_CYAN);
+        extern header_t* heap_start; 
+        #define HEAP_INITIAL_SIZE (64 * 1024 * 1024) 
+        
+        if (!heap_start) {
+            VESA_print("Heap is not initialized.\n", COLOR_RED);
+        } else {
+            uint32_t free_mem = 0; 
+            uint32_t used_mem = 0;
+            uint32_t blocks = 0;
+            
+            header_t* curr = heap_start;
+            uint32_t heap_limit = (uint32_t)heap_start + HEAP_INITIAL_SIZE; 
+            
+            while (curr != NULL) {
+                if ((uint32_t)curr < (uint32_t)heap_start || (uint32_t)curr >= heap_limit) {
+                    VESA_print("Error: Heap linked-list corrupted!\n", COLOR_RED);
+                    break;
+                }
+                if (curr->is_free) free_mem += curr->size;
+                else used_mem += curr->size;
+                blocks++;
+                if (curr->size == 0 && curr->next != NULL) {
+                    VESA_print("Error: Zero-size block detected.\n", COLOR_RED);
+                    break;
+                }
+                curr = curr->next;
+            }
+
+            char buf[32];
+            VESA_print("Total Blocks: ", COLOR_WHITE);
+            itoa(blocks, buf, 10);
+            VESA_print(buf, COLOR_YELLOW);
+            VESA_print("\n", COLOR_WHITE);
+
+            VESA_print("Used Memory:  ", COLOR_WHITE);
+            itoa(used_mem / 1024, buf, 10); 
+            VESA_print(buf, COLOR_YELLOW);
+            VESA_print(" KB\n", COLOR_WHITE);
+
+            VESA_print("Free Memory:  ", COLOR_WHITE);
+            itoa(free_mem / 1024, buf, 10); 
+            VESA_print(buf, COLOR_GREEN);
+            VESA_print(" KB\n", COLOR_WHITE);
+            
+            if (free_mem < 4194304) {
+                VESA_print("WARNING: Low Heap Memory! Close windows or REBOOT.\n", COLOR_RED);
+            }
+        }
+    }
     else if (kstrcmp(input, "CLEAR") == 0) {
         VESA_clear_buffer_only();
-        // THE FIX: Use current_task_idx, not hardcoded 0
         task_list[current_task_idx].cursor_x = 0;
         task_list[current_task_idx].cursor_y = 0;
     }
@@ -150,10 +140,7 @@ else if (kstrcmp(input, "STAT") == 0) {
         if (arg) { VESA_print(arg, COLOR_WHITE); VESA_print("\n", COLOR_WHITE); }
     }
     else if (kstrcmp(input, "SLEEP") == 0) {
-        if (arg) {
-            uint32_t ms = katoi(arg);
-            sleep(ms);
-        }
+        if (arg) { sleep(katoi(arg)); }
     }
 
     // --- FILESYSTEM ---
@@ -211,6 +198,8 @@ else if (kstrcmp(input, "STAT") == 0) {
                     kfree(buffer);
                 }
             } else VESA_print("File not found.\n", COLOR_RED);
+            
+            kfree(file); // FIX: Free the fat_search entry
         }
     }
     else if (kstrcmp(input, "HEXDUMP") == 0) {
@@ -238,7 +227,6 @@ else if (kstrcmp(input, "STAT") == 0) {
         if (arg) {
             extern void KED_init(const char* filename); 
             extern void KED_task();                     
-
             KED_init(arg);
             int tid = spawn_task(KED_task, NULL, "KED");
             task_create_window(tid, 0, 0, 0, 0);
@@ -273,33 +261,38 @@ else if (kstrcmp(input, "STAT") == 0) {
                 uint32_t size = entry->size;
                 char* file_data = fat_load_file(entry);
                 void* raw_code = kmalloc(size + 4096);
+                
+                kfree(entry); // FIX: Free the fat_search entry
+                
                 if (raw_code) {
                     uint32_t aligned_code = ((uint32_t)raw_code + 0xFFF) & 0xFFFFF000;
                     kmemcpy((void*)aligned_code, file_data, size);
                     kfree(file_data);
+                    
                     int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
                     if (tid >= 0) {
-                    task_create_window(tid, 0, 0, 0, 0);
-                    VESA_print("Task Spawned successfully.\n", COLOR_GREEN);
-                } 
-                else if (tid == ERR_TASK_TABLE_FULL) {
-                    VESA_print("Spawn Error: Task table is full (MAX_TASKS reached).\n", COLOR_RED);
-                    kfree(raw_code);
-                } 
-                else if (tid == ERR_TASK_STACK_OOM) {
-                    VESA_print("Spawn Error: Not enough memory for task stack.\n", COLOR_RED);
-                    kfree(raw_code);
-                }
-                else {
-                    VESA_print("Spawn Error: Unknown failure.\n", COLOR_RED);
-                    kfree(raw_code);
-                }
+                        task_create_window(tid, 0, 0, 0, 0);
+                        VESA_print("Task Spawned successfully.\n", COLOR_GREEN);
+                    } 
+                    else if (tid == ERR_TASK_TABLE_FULL) {
+                        VESA_print("Spawn Error: Task table is full (MAX_TASKS reached).\n", COLOR_RED);
+                        kfree(raw_code); // FIX: Clean up on failure
+                    } 
+                    else if (tid == ERR_TASK_STACK_OOM) {
+                        VESA_print("Spawn Error: Not enough memory for task stack.\n", COLOR_RED);
+                        kfree(raw_code); // FIX: Clean up on failure
+                    }
+                    else {
+                        VESA_print("Spawn Error: Unknown failure.\n", COLOR_RED);
+                        kfree(raw_code); // FIX: Clean up on failure
+                    }
+                } else {
+                    if (file_data) kfree(file_data); // FIX: Free if raw_code allocation fails
                 }
             } else VESA_print("File not found.\n", COLOR_RED);
         }
     }
     else if (kstrcmp(input, "COMPILE") == 0) {
-
         if (arg) shell_compile(arg);
         else VESA_print("Usage: COMPILE <file.txt>\n", COLOR_RED);
     }
@@ -316,7 +309,6 @@ else if (kstrcmp(input, "STAT") == 0) {
         VESA_print("\n", COLOR_RED);
     }
 
-    // THE FIX: Trigger a UI update for the shell to ensure command output is visible
     mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
 }
 
@@ -329,8 +321,9 @@ void shell_compile(const char* arg) {
 
     char* source_buf = (char*)fat_load_file(file);
     uint8_t* binary_buf = (uint8_t*)kmalloc(8192);
+    
+    kfree(file); // FIX: Free the fat_search entry
 
-    // CRITICAL FIX: Reset these ONLY ONCE before the passes begin.
     label_count = 0;
     rt_var_count = 0;
     
@@ -338,13 +331,11 @@ void shell_compile(const char* arg) {
         uint32_t current_pos = 0;
         uint32_t binary_pos = 0;
 
-        while (current_pos < file->size) {
+        while (current_pos < kstrlen(source_buf)) {
             char temp_line[128];
             uint32_t i = 0;
             
-            // BUG REMOVED: Do NOT wipe label_count here!
-
-            while (current_pos < file->size && source_buf[current_pos] != '\n' && i < 127) {
+            while (current_pos < kstrlen(source_buf) && source_buf[current_pos] != '\n' && i < 127) {
                 temp_line[i++] = source_buf[current_pos++];
             }
             temp_line[i] = '\0';
@@ -378,3 +369,5 @@ void shell_compile(const char* arg) {
     kfree(source_buf);
     kfree(binary_buf);
 }
+
+

@@ -597,7 +597,6 @@ void fat_touch(const char* filename) {
     uint8_t* dir_buf = (uint8_t*)kmalloc(512);
     if (!dir_buf) return;
 
-    // 1. Find an empty slot in the current directory
     uint32_t dir_lba = get_current_dir_lba();
     ide_read_sector(dir_lba, dir_buf);
     struct fat_dir_entry* entries = (struct fat_dir_entry*)dir_buf;
@@ -616,21 +615,16 @@ void fat_touch(const char* filename) {
         return;
     }
 
-    // 2. Clear the entry
-    kmemset(&entries[slot], 0, sizeof(struct fat_dir_entry));
+    // FIX: Divide by 4 so it only clears exactly 32 bytes (8 DWORDS)
+    kmemset(&entries[slot], 0, sizeof(struct fat_dir_entry) / 4);
     for (int i = 0; i < 8; i++) entries[slot].name[i] = ' ';
     for (int i = 0; i < 3; i++) entries[slot].ext[i] = ' ';
 
-    // 3. Parse Filename (e.g., "test.txt")
     int dot_pos = -1;
     for (int i = 0; filename[i] != '\0'; i++) {
-        if (filename[i] == '.') {
-            dot_pos = i;
-            break;
-        }
+        if (filename[i] == '.') { dot_pos = i; break; }
     }
 
-    // Copy Name part
     int name_len = (int)(dot_pos == -1) ? kstrlen(filename) : (size_t)dot_pos;
     for (int i = 0; i < name_len && i < 8; i++) {
         char c = filename[i];
@@ -638,7 +632,6 @@ void fat_touch(const char* filename) {
         entries[slot].name[i] = c;
     }
 
-    // Copy Extension part
     if (dot_pos != -1) {
         for (int i = 0; i < 3 && filename[dot_pos + 1 + i] != '\0'; i++) {
             char c = filename[dot_pos + 1 + i];
@@ -647,18 +640,15 @@ void fat_touch(const char* filename) {
         }
     }
 
-    // 4. Set Attributes
-    entries[slot].attr = 0x00; // Normal File
-    entries[slot].first_cluster_low = 0; // 0 bytes, so no cluster assigned yet
+    entries[slot].attr = 0x00; 
+    entries[slot].first_cluster_low = 0; 
     entries[slot].size = 0;
 
-    // 5. Write back to disk
     ide_write_sector(dir_lba, dir_buf);
     kprintf_unsync("Created file: %s\n", filename);
 
     kfree(dir_buf);
-}
-void fat_hexdump_file(const char* filename) {
+}void fat_hexdump_file(const char* filename) {
     // 1. Find the file
     struct fat_dir_entry* entry = fat_search(filename);
     
