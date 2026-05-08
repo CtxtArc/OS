@@ -340,94 +340,6 @@ void task_create_window(int tid, int x, int y, int w, int h) {
     
     task_list[tid].has_drawn = 1;
 }
-void compositor_task() {
-    struct multiboot_info* mbi = VESA_get_boot_info();
-    uint32_t sw = mbi->framebuffer_width;
-    uint32_t sh = mbi->framebuffer_height;
-    uint32_t* b_buffer = VESA_get_back_buffer();
-    int last_gui_count = -1; 
-
-    while(1) {
-        if (vesa_updating) { yield(); continue; }
-
-        int gui_tasks = 0;
-        int needs_update = 0;
-        for (int i = 0; i < MAX_TASKS; i++) {
-            if (task_list[i].state != 0 && task_list[i].has_window) {
-                gui_tasks++;
-                if (task_list[i].has_drawn) needs_update = 1;
-            }
-        }
-
-        if (gui_tasks != last_gui_count) {
-            needs_update = 1;
-            last_gui_count = gui_tasks;
-            refresh_tiling_layout();
-        }
-
-        if (!needs_update) { 
-            sleep(10); 
-            continue; 
-        }
-
-        if (gui_tasks == 0) {
-            VESA_draw_rect(0, 0, sw, sh, 0x000033);
-        } else {
-            // WIPE back buffer background to cleanly reset edges
-            for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
-
-            int tile_width = sw / gui_tasks;
-            int current_tile = 0;
-
-            for (int i = 0; i < MAX_TASKS; i++) {
-                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer != NULL) {
-                    int start_x = current_tile * tile_width;
-
-                    if (current_tile > 0) {
-                        // FIX #2: WHITE DIVIDER. Draws strictly at the tile barrier!
-                        for (uint32_t y = 0; y < sh; y++) {
-                            b_buffer[y * sw + start_x]     = 0xFFFFFF; 
-                            b_buffer[y * sw + start_x + 1] = 0xFFFFFF;
-                        }
-                    }
-
-                    // Properly account for the divider space
-                    int dst_x = (current_tile > 0) ? start_x + 2 : start_x;
-                    int copy_w = tile_width - ((current_tile > 0) ? 2 : 0);
-
-                    // Perfectly stretch the last tile to exactly hit the right wall
-                    if (current_tile == gui_tasks - 1) {
-                        copy_w = sw - dst_x;
-                    }
-
-                    // Blit the tile data perfectly aligned
-                    for (uint32_t y = 0; y < sh; y++) {
-                        uint32_t* src = &task_list[i].window_buffer[y * sw];
-                        uint32_t* dst = &b_buffer[y * sw + dst_x];
-                        kmemcpy32(dst, src, copy_w);
-                    }
-                    // --- THE FIX: VISUAL FOCUS INDICATOR ---
-                    // If this tile is the one receiving keyboard input, 
-                    // draw a 4-pixel thick Bright Yellow bar at the top!
-                    if (i == keyboard_focus_tid) {
-                        for (uint32_t y = 0; y < 4; y++) {
-                            for (int ix = 0; ix < copy_w; ix++) {
-                                b_buffer[y * sw + dst_x + ix] = 0xFFFF00; 
-                            }
-                        }
-                    }
-
-                    task_list[i].has_drawn = 0;
-                    current_tile++;
-                }
-            }
-        }
-        
-        vesa_dirty = 1; 
-        VESA_flip();
-        sleep(10);
-    }
-}
 void run_startup_tests() {
     VESA_print("\n--- Running KDXOS System Diagnostics ---\n", 0x00FFFF);
 
@@ -518,4 +430,96 @@ void run_startup_tests() {
 
     VESA_print("--- Diagnostics Complete ---\n\n", 0x00FFFF);
     sleep(2000);
+}
+void compositor_task() {
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t sw = mbi->framebuffer_width;
+    uint32_t sh = mbi->framebuffer_height;
+    uint32_t* b_buffer = VESA_get_back_buffer();
+    int last_gui_count = -1; 
+
+    while(1) {
+        if (vesa_updating) { yield(); continue; }
+
+        int gui_tasks = 0;
+        int needs_update = 0;
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (task_list[i].state != 0 && task_list[i].has_window) {
+                gui_tasks++;
+                if (task_list[i].has_drawn) needs_update = 1;
+            }
+        }
+
+        if (gui_tasks != last_gui_count) {
+            needs_update = 1;
+            last_gui_count = gui_tasks;
+            refresh_tiling_layout();
+        }
+
+        if (!needs_update) { 
+            // FIX: Yield instead of sleep to prevent input lag!
+            yield(); 
+            continue; 
+        }
+
+        if (gui_tasks == 0) {
+            VESA_draw_rect(0, 0, sw, sh, 0x000033);
+        } else {
+            // WIPE back buffer background to cleanly reset edges
+            for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
+
+            int tile_width = sw / gui_tasks;
+            int current_tile = 0;
+            int border_thickness = 2; // A crisp, clean 2-pixel border
+
+            for (int i = 0; i < MAX_TASKS; i++) {
+                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer != NULL) {
+                    
+                    int start_x = current_tile * tile_width;
+                    int current_tile_w = tile_width;
+
+                    // Ensure the last tile stretches perfectly to the right wall
+                    if (current_tile == gui_tasks - 1) {
+                        current_tile_w = sw - start_x;
+                    }
+
+                    // 1. Blit the actual window contents seamlessly
+                    for (uint32_t y = 0; y < sh; y++) {
+                        uint32_t* src = &task_list[i].window_buffer[y * sw];
+                        uint32_t* dst = &b_buffer[y * sw + start_x];
+                        kmemcpy32(dst, src, current_tile_w);
+                    }
+
+                    // 2. THE TWM BORDER LOGIC
+                    // Active window gets Bright Cyan, Inactive gets Dark Gray
+                    uint32_t border_color = (i == keyboard_focus_tid) ? 0x00FFFF : 0x444444;
+
+                    // Draw Top & Bottom Edges
+                    for (int by = 0; by < border_thickness; by++) {
+                        for (int bx = 0; bx < current_tile_w; bx++) {
+                            b_buffer[(by) * sw + start_x + bx]          = border_color; // Top
+                            b_buffer[(sh - 1 - by) * sw + start_x + bx] = border_color; // Bottom
+                        }
+                    }
+                    
+                    // Draw Left & Right Edges
+                    for (uint32_t by = 0; by < sh; by++) {
+                        for (int bx = 0; bx < border_thickness; bx++) {
+                            b_buffer[by * sw + start_x + bx]                      = border_color; // Left
+                            b_buffer[by * sw + start_x + current_tile_w - 1 - bx] = border_color; // Right
+                        }
+                    }
+
+                    task_list[i].has_drawn = 0;
+                    current_tile++;
+                }
+            }
+        }
+        
+        vesa_dirty = 1; 
+        VESA_flip();
+        
+        // FIX: Yield instead of sleep to run at max FPS!
+        yield();
+    }
 }
