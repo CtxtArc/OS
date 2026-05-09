@@ -355,7 +355,7 @@ void shell_task() {
     while (!task_list[current_task_idx].has_window || !task_list[current_task_idx].window_ready) {
         yield(); 
     }
-
+    load_history();
     char line[128];
     int idx = 0;
 
@@ -386,26 +386,68 @@ void shell_task() {
             while(1) yield();
         }
 
-        if (c == '\n') {
-            line[idx] = '\0';
-            shell_print("\n", 0xFFFFFF); 
-            if (idx > 0) execute_command(line);
-            idx = 0;
-            shell_print("> ", 0xFFFF00);
+        // --- ARROW UP ---
+        if (c == 11 && history_count > 0) {
+            if (history_view_idx == -1) history_view_idx = history_count - 1;
+            else if (history_view_idx > 0) history_view_idx--;
+
+            // Clear current line on screen
+            while(idx > 0) { idx--; t->cursor_x -= 8; shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222); }
             
-            mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
+            // Copy history to current line
+            int actual_idx = (history_count == MAX_HISTORY) ? (history_write_idx + history_view_idx) % MAX_HISTORY : history_view_idx;
+            kstrcpy(line, shell_history[actual_idx]);
+            idx = kstrlen(line);
+            shell_print(line, 0xFFFFFF);
+            mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
         }
-        else if (c == '\b' && idx > 0) {
-            idx--;
-            if (t->cursor_x >= 8) {
-                t->cursor_x -= 8;
-                int x = t->cursor_x;
-                int y = t->cursor_y;
-                
-                // NO MORE ASSEMBLY CONFLICTS! Draw space directly to buffer.
-                shell_draw_char(' ', x, y, 0x222222, 0x222222);
-                mark_task_dirty(current_task_idx, x, y, 8, 8); 
+        // --- ARROW DOWN ---
+        else if (c == 12) {
+            if (history_view_idx != -1) {
+                history_view_idx++;
+                if (history_view_idx >= history_count) {
+                    history_view_idx = -1; // Return to empty line
+                    while(idx > 0) { idx--; t->cursor_x -= 8; shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222); }
+                } else {
+                    while(idx > 0) { idx--; t->cursor_x -= 8; shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222); }
+                    int actual_idx = (history_count == MAX_HISTORY) ? (history_write_idx + history_view_idx) % MAX_HISTORY : history_view_idx;
+                    kstrcpy(line, shell_history[actual_idx]);
+                    idx = kstrlen(line);
+                    shell_print(line, 0xFFFFFF);
+                }
+                mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
             }
+        }
+        // --- ENTER (Process & Save History) ---
+        else if (c == '\n') {
+            line[idx] = '\0';
+            shell_print("\n", 0xFFFFFF);
+            if (idx > 0) {
+                // Add to circular buffer if not identical to last entry
+                kstrcpy(shell_history[history_write_idx], line);
+                history_write_idx = (history_write_idx + 1) % MAX_HISTORY;
+                if (history_count < MAX_HISTORY) history_count++;
+                
+                save_history_to_disk();
+                execute_command(line);
+            }
+            idx = 0;
+            history_view_idx = -1;
+            shell_print("> ", 0xFFFF00);
+            mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
+        }
+        // --- BACKSPACE / CHARS ---
+        else if (c == '\b' && idx > 0) {
+            idx--; t->cursor_x -= 8;
+            shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
+            mark_task_dirty(current_task_idx, t->cursor_x, t->cursor_y, 8, 8);
+        }
+        else if (idx < 127 && c >= ' ' && c <= '~') {
+            line[idx++] = c;
+            char str[2] = {c, '\0'};
+            int sx = t->cursor_x; int sy = t->cursor_y;
+            shell_print(str, 0xFFFFFF);
+            mark_task_dirty(current_task_idx, sx, sy, 8, 8);
         }
         else if (idx < 127 && c >= ' ') {
             line[idx++] = c;
@@ -728,4 +770,44 @@ void suicide_task() {
     __asm__ volatile("mov $0xFFFF, %%ax; mov %%ax, %%ds" : : : "eax");
 
     while(1) yield();
+}
+
+void load_history() {
+    struct fat_dir_entry* entry = fat_search("HISTORY.TXT");
+    if (entry) {
+        char* data = fat_load_file(entry);
+        if (data) {
+            uint32_t pos = 0;
+            while (pos < entry->size && history_count < MAX_HISTORY) {
+                int line_len = 0;
+                while (data[pos + line_len] != '\n' && data[pos + line_len] != '\0') line_len++;
+                
+                kstrncpy(shell_history[history_write_idx], &data[pos], (line_len > 127) ? 127 : line_len);
+                shell_history[history_write_idx][line_len] = '\0';
+                
+                history_write_idx = (history_write_idx + 1) % MAX_HISTORY;
+                history_count++;
+                pos += (line_len + 1);
+            }
+            kfree(data);
+        }
+        kfree(entry);
+    }
+}
+
+void save_history_to_disk() {
+    char* big_buf = kmalloc(MAX_HISTORY * 128);
+    big_buf[0] = '\0';
+    
+    // Write oldest to newest
+    int start = (history_count == MAX_HISTORY) ? history_write_idx : 0;
+    for (int i = 0; i < history_count; i++) {
+        int idx = (start + i) % MAX_HISTORY;
+        kstrcat(big_buf, shell_history[idx]);
+        kstrcat(big_buf, "\n");
+    }
+    
+    if (!fat_search("HISTORY.TXT")) fat_touch("HISTORY.TXT");
+    fat_write_file("HISTORY.TXT", big_buf);
+    kfree(big_buf);
 }

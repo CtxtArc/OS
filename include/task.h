@@ -9,6 +9,13 @@
 #define ERR_TASK_TABLE_FULL   -1
 #define ERR_TASK_STACK_OOM    -2
 #define ERR_TASK_INVALID_EP   -3
+
+#define MAX_HISTORY 10
+static char shell_history[MAX_HISTORY][128];
+static int history_count = 0;
+static int history_write_idx = 0;
+static int history_view_idx = -1; // -1 means user is typing a new line
+
 struct task {
     uint32_t esp;
     uint32_t state; // 0 = empty, 1 = ready, 2 = sleep, 3 = blocked 
@@ -78,5 +85,7 @@ void compositor_task();
 void schedule();
 void suicide_task();
 
+void save_history_to_disk();
+void load_history();
 void shell_print(char* str, uint32_t color);
 #endif
