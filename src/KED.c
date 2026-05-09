@@ -118,25 +118,42 @@ void KED_task() {
             VESA_print_unsync("\nArrows: Move | Ctrl+S: Save | Ctrl+Q: Exit\n", 0xAAAAAA);
             VESA_print_unsync("-------------------------------------------\n", 0x888888);
             
-            // Print text before cursor
-            char saved = text_buffer[cursor_index];
-            text_buffer[cursor_index] = '\0';
-            VESA_print_unsync(text_buffer, 0xFFFFFF);
-            text_buffer[cursor_index] = saved;
+            // Print text before cursor (so cursor_x/y lands on the cursor char)
+    char saved = text_buffer[cursor_index];
+    text_buffer[cursor_index] = '\0';
+    VESA_print_unsync(text_buffer, 0xFFFFFF);
+    text_buffer[cursor_index] = saved;
 
-            // Draw Cursor
-            if (current_cursor_state == 0) {
-                VESA_print_unsync("_", 0x00FFFF);
-            } else {
-                char blink[2] = { (saved ? (saved == '\n' ? ' ' : saved) : ' '), '\0' };
-                VESA_print_unsync(blink, 0xFFFFFF);
-            }
+    // Read the cursor's pixel position from the task
+    volatile struct task* cur = &task_list[current_task_idx];
+    int cx = cur->cursor_x;
+    int cy = cur->cursor_y;
 
-            // Print text after cursor (adjusting for the character we highlighted)
-            if (saved != '\0') {
-                VESA_print_unsync(&text_buffer[cursor_index + (current_cursor_state == 0 ? 0 : 1)], 0xFFFFFF);
-            }
+    // Draw block cursor (8x10 filled rect)
+    if (current_cursor_state == 0) {
+        VESA_draw_rect(cx, cy, 8, 10, 0xA5A5A5); // solid block
+    }
 
+    // Print the character under the cursor (contrasting color, or space)
+    char under[2] = { saved ? (saved == '\n' ? ' ' : saved) : ' ', '\0' };
+    if (current_cursor_state == 0) {
+        VESA_print_unsync(under, 0x000000); // dark text on bright cursor
+    } else {
+        // Blink off: just print the char normally, no block
+        VESA_print_unsync(under, 0xFFFFFF);
+    }
+
+    // Print the rest of the text after the cursor character
+    // Skip 1 char since we just printed it
+    if (saved != '\0' && saved != '\n') {
+        VESA_print_unsync(&text_buffer[cursor_index + 1], 0xFFFFFF);
+    } else if (saved == '\n') {
+        // The newline itself advances the line; we already printed a space,
+        // so manually advance and print the remainder starting after the newline
+        cur->cursor_x = 0;
+        cur->cursor_y += 10;
+        VESA_print_unsync(&text_buffer[cursor_index + 1], 0xFFFFFF);
+    }
             mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
             needs_redraw = 0;
             __asm__ volatile("sti");
