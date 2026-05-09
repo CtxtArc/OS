@@ -101,6 +101,7 @@ void task_create_window(int tid, int x, int y, int w, int h) {
     uint32_t sw = mbi->framebuffer_width;
     uint32_t sh = mbi->framebuffer_height;
 
+    // LOCK: Ensure the compositor doesn't touch this yet
     task_list[tid].window_ready = 0;
     task_list[tid].has_window = 0;
 
@@ -109,6 +110,7 @@ void task_create_window(int tid, int x, int y, int w, int h) {
     }
 
     if (task_list[tid].window_buffer) {
+        // Fast fill background
         uint32_t count = sw * sh;
         uint32_t val = 0x222222;
         uint32_t* dest = task_list[tid].window_buffer;
@@ -121,14 +123,19 @@ void task_create_window(int tid, int x, int y, int w, int h) {
         task_list[tid].cursor_x = 0;
         task_list[tid].cursor_y = 0;
 
+        // FORCE tiling refresh to assign actual screen coordinates
+        refresh_tiling_layout();
+
+        // UNLOCK: compositor can now see this window
         task_list[tid].has_window = 1;
         task_list[tid].window_ready = 1;
 
-        refresh_tiling_layout();
-        mark_task_dirty(tid, 0, 0, task_list[tid].win_w, task_list[tid].win_h);
+        // Force a GLOBAL redraw to make the new tile appear instantly
+        for(int i = 0; i < MAX_TASKS; i++) {
+            if (task_list[i].state != 0) mark_task_dirty(i, 0, 0, 4000, 4000);
+        }
     }
 }
-
 int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
     if (!entry_point) return ERR_TASK_INVALID_EP;
 
@@ -181,15 +188,12 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
 
 void kill_task(int id) {
     if (id <= 0 || id >= MAX_TASKS) return;
+
+    // 1. Stop the compositor from looking at this window immediately
     task_list[id].window_ready = 0;
+    task_list[id].has_window = 0;
 
-    if (task_list[id].has_window) {
-        VESA_clear_region(task_list[id].win_x, task_list[id].win_y, 
-                          task_list[id].win_w + 4, task_list[id].win_h + 20);
-        vesa_dirty = 1;
-        VESA_flip();
-    }
-
+    // 2. Free the memory
     if (task_list[id].window_buffer) {
         kfree(task_list[id].window_buffer);
         task_list[id].window_buffer = NULL;
@@ -197,11 +201,19 @@ void kill_task(int id) {
     if (task_list[id].stack_ptr) { kfree(task_list[id].stack_ptr); task_list[id].stack_ptr = NULL; }
     if (task_list[id].code_ptr)  { kfree(task_list[id].code_ptr);  task_list[id].code_ptr  = NULL; }
 
+    // 3. Mark state as dead
     task_list[id].state = 0;
-    task_list[id].has_window = 0;
-    task_list[id].is_dirty = 0; 
-}
 
+    // 4. Trigger the Compositor to rearrange remaining windows
+    refresh_tiling_layout();
+    
+    // 5. IMPORTANT: Force a full global redraw to clean up the "hole" left behind
+    for(int i = 0; i < MAX_TASKS; i++) {
+        if (task_list[i].state != 0) {
+            mark_task_dirty(i, 0, 0, 4000, 4000);
+        }
+    }
+}
 void compositor_task() {
     struct multiboot_info* mbi = VESA_get_boot_info();
     uint32_t sw = mbi->framebuffer_width;
@@ -640,12 +652,18 @@ void run_startup_tests() {
     cur_y += 50;
 
     VESA_print_at("DIAGNOSTICS COMPLETE.", TEST_LABEL_X, cur_y, color_info); cur_y += 25;
-    VESA_print_at("BOOTING KDXOS...", TEST_LABEL_X, cur_y, color_title);
+    VESA_print_at("PRESS ANY KEY TO CONTINUE...", TEST_LABEL_X, cur_y, color_title);
     
     vesa_dirty = 1; 
     VESA_flip();
 
-    for (volatile uint32_t i = 0; i < 10000000; i++) {}
+    // Clear any existing keys first
+    while(has_key_in_buffer()) get_key_from_buffer();
+    // Wait for the user
+    while(!has_key_in_buffer()) {
+        __asm__ volatile("hlt");
+    }
+    get_key_from_buffer(); // Consume the key
 }
 
 void init_multitasking() {

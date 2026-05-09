@@ -391,24 +391,30 @@ void syscall_handler(struct registers *regs) {
         task_list[id].state = 2; // SLEEPING
     }
     else if (regs->eax == 4) { // EXIT
+        int id = current_task_idx;
+        
+        // Stop blitting this task
+        task_list[id].window_ready = 0;
+        task_list[id].has_window = 0;
         task_list[id].state = 0; // DEAD
+
         if (task_list[id].window_buffer) {
             kfree(task_list[id].window_buffer);
             task_list[id].window_buffer = NULL;
         }
+
         refresh_tiling_layout(); 
 
+        // If this was the focused task, pass focus to someone else
         if (keyboard_focus_tid == id) {
-            int next = (id + 1) % MAX_TASKS;
-            while (next != id) {
-                if (task_list[next].state != 0 && task_list[next].has_window) {
-                    keyboard_focus_tid = next;
-                    mark_task_dirty(next, 0, 0, 4000, 4000); 
-                    break;
-                }
-                next = (next + 1) % MAX_TASKS;
-            }
+            keyboard_focus_tid = 0; // Default to kernel/shell
         }
+
+        // Force everyone else to redraw their borders/contents over the gap
+        for(int i = 0; i < MAX_TASKS; i++) {
+            if (task_list[i].state != 0) mark_task_dirty(i, 0, 0, 4000, 4000);
+        }
+
         regs->eip = (uint32_t)idle_task_code;
     }
     else if (regs->eax == 6) { // DRAW_RECT
