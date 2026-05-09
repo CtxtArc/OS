@@ -1,4 +1,0 @@
-EAX (ID),Name,EBX,ECX,EDX,Description
-1,DRAW_CHAR,Character,X Coord,Y Coord,"Draws a char to VESA at (X, Y)"
-2,GET_TICKS,-,-,-,Returns system_ticks in EAX
-3,SLEEP,Milliseconds,-,-,Puts task in SLEEPING state

@@ -1,0 +1,20 @@
+Command,Arg 1,Arg 2,Arg 3,Arg 4,Arg 5,Description
+LABEL,Name,-,-,-,-,Defines a target for jumps and calls.
+GOTO,Label Name,-,-,-,-,Unconditionally jumps to the specified label.
+CALL,Label Name,-,-,-,-,Calls a subroutine.
+RET,-,-,-,-,-,Returns from the current subroutine.
+SET,Variable,Value,-,-,-,Declares a variable (or updates it) with a numeric value.
+ADD,Variable,Value,-,-,-,Adds a numeric value to the specified variable.
+SUB,Variable,Value,-,-,-,Subtracts a numeric value from the specified variable.
+CMP,Variable,Value,-,-,-,Compares a variable's value against a target number.
+JE,Label Name,-,-,-,-,Jumps to label if the previous CMP was Equal.
+JNE,Label Name,-,-,-,-,Jumps to label if the previous CMP was Not Equal.
+JL,Label Name,-,-,-,-,Jumps to label if the previous CMP was Less.
+JG,Label Name,-,-,-,-,Jumps to label if the previous CMP was Greater.
+GETKEY,Variable,-,-,-,-,Reads a key from the keyboard buffer into the variable (0 if none).
+PRINT,"String" / Var,X Coord,Y Coord,Color,-,Prints a literal string or variable value at (X Y).
+RECT,X Coord,Y Coord,Width,Height,Color,Draws a filled rectangle inside the window.
+WINDOW,X Coord,Y Coord,Width,Height,-,Initializes the app's window dimensions.
+CLEAR,-,-,-,-,-,Clears the window back to the default background color.
+SLEEP,Milliseconds,-,-,-,-,Pauses execution for the specified time.
+EXIT,-,-,-,-,-,Terminates the task and cleans up its memory.

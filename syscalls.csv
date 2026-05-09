@@ -1,0 +1,11 @@
+EAX (ID),Name,EBX (Arg 1),ECX (Arg 2),EDX (Arg 3),ESI / EDI (Arg 4 & 5),Description
+1,DRAW_CHAR,Character,X Coord,Y Coord,-,Draws a single ASCII character to the window.
+2,GET_TICKS,-,-,-,-,Returns the current system_ticks value into EAX.
+3,SLEEP,Milliseconds,-,-,-,Puts the calling task into a SLEEPING state.
+4,EXIT,-,-,-,-,Kills the current task and frees its window and stack.
+5,CLEAR,-,-,-,-,Clears the task's window buffer.
+6,RECT,X Coord,Y Coord,Width,ESI=Height / EDI=Color,Draws a colored rectangle.
+7,PRINT_STR,String Ptr,X Coord,Y Coord,EDI=Color,Prints a literal string from memory.
+8,WINDOW,X Coord,Y Coord,Width,ESI=Height,Registers the task's graphical dimensions.
+9,PRINT_VAR,Numeric Value,X Coord,Y Coord,EDI=Color,Prints an integer value as text to the screen.
+10,GETKEY,-,-,-,-,Returns the next key from the hardware buffer into EAX (0 if empty).
