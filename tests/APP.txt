@@ -1,0 +1,57 @@
+WINDOW 0 0 400 300
+CALL draw_menu
+
+SET input_key 0
+
+LABEL input_loop
+    # Grab keyboard input (Non-blocking)
+    GETKEY input_key
+    
+    # If key is 0 (nothing pressed), just sleep and loop
+    CMP input_key 0
+    JE loop_end
+    
+    # Check if '1' was pressed (ASCII 49)
+    CMP input_key 49
+    JE handle_option_one
+    
+    # Check if '2' was pressed (ASCII 50)
+    CMP input_key 50
+    JE handle_option_two
+    
+    # Check if 'q' or 'Q' was pressed (ASCII 113 or 81)
+    CMP input_key 113
+    JE handle_quit
+    CMP input_key 81
+    JE handle_quit
+    
+LABEL loop_end
+    SLEEP 50
+    GOTO input_loop
+
+# --- Input Handlers ---
+LABEL handle_option_one
+    RECT 20 150 360 40 0x222222
+    PRINT "You selected Option 1!" 30 160 0x00FF00
+    GOTO input_loop
+
+LABEL handle_option_two
+    RECT 20 150 360 40 0x222222
+    PRINT "You selected Option 2!" 30 160 0x00FFFF
+    GOTO input_loop
+
+LABEL handle_quit
+    RECT 20 150 360 40 0x222222
+    PRINT "Exiting application..." 30 160 0xFF0000
+    SLEEP 1000
+    EXIT
+
+# --- Subroutines ---
+LABEL draw_menu
+    RECT 0 0 400 300 0x222222
+    PRINT "KDXOS INTERACTIVE MENU" 100 20 0xFFFF00
+    RECT 20 50 360 2 0x555555
+    PRINT "[1] Option One" 40 70 0xFFFFFF
+    PRINT "[2] Option Two" 40 100 0xFFFFFF
+    PRINT "[Q] Quit Application" 40 130 0xAAAAAA
+    RET

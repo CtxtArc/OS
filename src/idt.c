@@ -550,16 +550,15 @@ else if (regs->eax == 9) { // PRINT_NUM (Variable)
         }
         mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
     }
-}  else if (regs->eax == 10) { // INPUT (Get Key)
-        volatile struct task* me = &task_list[id];
+}  // Syscall 10: Non-blocking Keyboard Read GETKEY
+    if (regs->eax == 10) {
+        extern int has_key_in_buffer();
+        extern char get_key_from_buffer();
         
-        // Check our task's specific keyboard buffer
-        if (me->kbd_head != me->kbd_tail) {
-            char c = me->kbd_buffer[me->kbd_tail];
-            me->kbd_tail = (me->kbd_tail + 1) % 64;
-            regs->eax = (uint32_t)c; // Return the key in EAX
+        if (has_key_in_buffer()) {
+            regs->eax = (uint32_t)get_key_from_buffer();
         } else {
-            regs->eax = 0; // No key pressed
+            regs->eax = 0; // Return 0 if no key is pressed
         }
-    }
-}
+        return;
+    }}

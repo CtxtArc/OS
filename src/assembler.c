@@ -153,9 +153,15 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         (*pos)++;
         if (out_buf) kmemcpy(&out_buf[*pos], &val, 4); *pos += 4;
     }
-    else if (cmd[0] == 'J' && (cmd[1] == 'E' || cmd[1] == 'L' || cmd[1] == 'G')) {
+    // FIX: ADDED 'N' FOR JNE (Jump Not Equal)
+    else if (cmd[0] == 'J' && (cmd[1] == 'E' || cmd[1] == 'L' || cmd[1] == 'G' || cmd[1] == 'N')) {
         char lbl[32]; get_token(ptr, lbl);
-        uint8_t cond = (cmd[1]=='E') ? 0x84 : (cmd[1]=='L' ? 0x8C : 0x8F);
+        uint8_t cond = 0;
+        if (cmd[1] == 'E') cond = 0x84;      // JE  (Equal)
+        else if (cmd[1] == 'L') cond = 0x8C; // JL  (Less)
+        else if (cmd[1] == 'G') cond = 0x8F; // JG  (Greater)
+        else if (cmd[1] == 'N') cond = 0x85; // JNE (Not Equal)
+        
         uint32_t target = 0;
         if (pass == 2) {
             int found = 0;
@@ -172,6 +178,45 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         *pos += 2;
         int32_t off = (int32_t)target - (int32_t)(*pos + 4);
         if (out_buf) kmemcpy(&out_buf[*pos], &off, 4); 
+        *pos += 4;
+    }
+    // --- NEW: SUBROUTINES (CALL / RET) ---
+    else if (kstrcmp(cmd, "CALL") == 0) {
+        char name[32]; get_token(ptr, name);
+        uint32_t target = 0;
+        if (pass == 2) {
+            int found = 0;
+            for(int i = 0; i < label_count; i++) {
+                if(kstrcmp(label_table[i].name, name) == 0) { 
+                    target = label_table[i].address; 
+                    found = 1;
+                    break; 
+                }
+            }
+            if (!found) kprintf_unsync("ASM ERROR: CALL Label '%s' not found!\n", name);
+        }
+        if (out_buf) out_buf[*pos] = 0xE8; // E8 is x86 CALL
+        (*pos)++;
+        int32_t offset = (int32_t)target - (int32_t)(*pos + 4);
+        if (out_buf) kmemcpy(&out_buf[*pos], &offset, 4); 
+        *pos += 4;
+    }
+    else if (kstrcmp(cmd, "RET") == 0) {
+        if (out_buf) out_buf[*pos] = 0xC3; // C3 is x86 RET
+        (*pos)++;
+    }
+    // --- NEW: KEYBOARD INPUT (GETKEY) ---
+    else if (kstrcmp(cmd, "GETKEY") == 0) {
+        char var_name[32]; get_token(ptr, var_name);
+        uint32_t offset = get_var_offset(var_name);
+        
+        emit_load(0xB8, "10", out_buf, pos); // Load 10 into EAX for Syscall 10
+        if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; } // INT 0x80
+        *pos += 2;
+        
+        if (out_buf) { out_buf[*pos] = 0xA3; } // A3 is MOV [absolute_memory], EAX
+        (*pos)++;
+        if (out_buf) { kmemcpy(&out_buf[*pos], &offset, 4); }
         *pos += 4;
     }
     else if (kstrcmp(cmd, "SLEEP") == 0) {
