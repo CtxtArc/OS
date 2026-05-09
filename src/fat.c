@@ -400,7 +400,6 @@ void fat_ls_cluster(uint32_t cluster) {
         }
 
         // 3. Print the name using the entry color
-        // Note: I'm inlining the print logic so it uses entry_color correctly
         for (int n = 0; n < 8; n++) {
             if (entry[i].name[n] != ' ') kprintf_color(entry_color, "%c", entry[i].name[n]);
         }
@@ -415,13 +414,39 @@ void fat_ls_cluster(uint32_t cluster) {
             }
         }
 
-        // 5. Print size in a dimmer color (Dark Gray)
-        kprintf_color(0x555555, "  %d bytes\n", entry[i].size);
+        // 5. Human-Readable Size Format (Integer Math Only)
+        uint32_t sz = entry[i].size;
+        uint32_t dim_color = 0x555555;
+        
+        // Add a visual spacer
+        kprintf_color(dim_color, "  ");
+
+        if (sz < 1024) {
+            // Less than 1 KB: Show Bytes
+            kprintf_color(dim_color, "%d B\n", sz);
+        } 
+        else if (sz < 1048576) { // 1024 * 1024
+            // Show KB with 1 decimal place
+            uint32_t kb = sz / 1024;
+            uint32_t dec = ((sz % 1024) * 10) / 1024;
+            kprintf_color(dim_color, "%d.%d KB\n", kb, dec);
+        } 
+        else if (sz < 1073741824) { // 1024 * 1024 * 1024
+            // Show MB with 1 decimal place
+            uint32_t mb = sz / 1048576;
+            uint32_t dec = ((sz % 1048576) * 10) / 1048576;
+            kprintf_color(dim_color, "%d.%d MB\n", mb, dec);
+        } 
+        else {
+            // Show GB with 1 decimal place
+            uint32_t gb = sz / 1073741824;
+            uint32_t dec = ((sz % 1073741824) * 10) / 1073741824;
+            kprintf_color(dim_color, "%d.%d GB\n", gb, dec);
+        }
     }
     
     VESA_flip();
-}
-uint32_t fat_get_current_cluster() {
+}uint32_t fat_get_current_cluster() {
     return current_dir_cluster;
 }
 void fat_print_fixed(const char* str, int len) {
