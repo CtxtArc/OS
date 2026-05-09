@@ -9,62 +9,123 @@
 #include "bmp.h"
 #include "vfs.h"
 
+#define TEST_LABEL_X 100
+#define TEST_RESULT_X 450 
+
 uint32_t* desktop_bg_buffer = NULL; 
-int pending_shell_spawn = 0;
+int pending_shell_spawn = 1;
 extern uint32_t* VESA_get_back_buffer();
-int keyboard_focus_tid = 0;
+volatile int keyboard_focus_tid = 0;
 extern int vesa_updating;
 extern int vesa_dirty; 
 extern void switch_to_stack(uint32_t* old_esp, uint32_t new_esp);
 extern volatile uint32_t system_ticks;
-int multitasking_enabled = 0;
+volatile int multitasking_enabled = 0;
 volatile struct task task_list[MAX_TASKS];
-int current_task_idx = 0;
+volatile int current_task_idx = 0;
 extern volatile int klog_needs_sync;
 extern char klog_ram_buffer[];
-
+extern uint8_t font8x8_basic[128][8];
 extern void mark_task_dirty(int id, int x, int y, int w, int h);
 
-void shell_task() {
-    char line[128];
-    int idx = 0;
+// --- NEW HELPER FUNCTIONS: Draw directly to the Window Buffer ---
+void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
+    volatile struct task* t = &task_list[current_task_idx];
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t sw = mbi->framebuffer_width;
 
-    VESA_print("> ", COLOR_YELLOW);
+    if (!t->has_window || !t->window_buffer) return;
     
-    mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
+    uint8_t* glyph = font8x8_basic[(unsigned char)c];
+    for (int row = 0; row < 8; row++) {
+        for (int col = 0; col < 8; col++) {
+            int dx = x + col;
+            int dy = y + row;
+            if (dx >= 0 && dx < t->win_w && dy >= 0 && dy < t->win_h) {
+                if (glyph[row] & (1 << (7 - col))) t->window_buffer[(dy * sw) + dx] = fg; 
+                else t->window_buffer[(dy * sw) + dx] = bg; 
+            }
+        }
+    }
+}
 
-    while(1) {
-        if (task_list[current_task_idx].cursor_x >= task_list[current_task_idx].win_w) {
-            task_list[current_task_idx].cursor_x = 0;
-            task_list[current_task_idx].cursor_y += 10;
+void shell_print(char* str, uint32_t color) {
+    volatile struct task* t = &task_list[current_task_idx];
+    for (int i = 0; str[i] != '\0'; i++) {
+        if (str[i] == '\n') {
+            t->cursor_x = 0;
+            t->cursor_y += 10;
+            continue;
         }
+        shell_draw_char(str[i], t->cursor_x, t->cursor_y, color, 0x222222);
+        t->cursor_x += 8;
+        if (t->cursor_x >= t->win_w) {
+            t->cursor_x = 0;
+            t->cursor_y += 10;
+        }
+    }
+}
+// ---------------------------------------------------------------
 
-        char c = keyboard_getchar();
+void schedule() {
+    if (!multitasking_enabled) return;
 
-        if (c == 4) { 
-            __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
-            while(1) yield();
-        }
+    int old_idx = current_task_idx;
+    int next_idx = current_task_idx;
 
-        if (c == '\n') {
-            line[idx] = '\0';
-            VESA_print("\n", COLOR_WHITE);
-            if (idx > 0) execute_command(line);
-            idx = 0;
-            VESA_print("> ", COLOR_YELLOW);
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (task_list[i].state == 2) { 
+            if (task_list[i].sleep_ticks > 0) {
+                task_list[i].sleep_ticks--;
+            } else {
+                task_list[i].state = 1; 
+            }
         }
-        else if (c == '\b' && idx > 0) {
-            idx--;
-            if (task_list[current_task_idx].cursor_x >= 8) task_list[current_task_idx].cursor_x -= 0x08;
-            VESA_draw_char(' ', task_list[current_task_idx].cursor_x, task_list[current_task_idx].cursor_y, 0x222222);
-        }
-        else if (idx < 127 && c >= ' ') {
-            line[idx++] = c;
-            char str[2] = {c, '\0'};
-            VESA_print(str, COLOR_WHITE);
-        }
+    }
+
+    do {
+        next_idx++;
+        if (next_idx >= MAX_TASKS) next_idx = 0;
+    } while (task_list[next_idx].state != 1 && next_idx != old_idx);
+
+    if (next_idx != old_idx) {
+        current_task_idx = next_idx;
+        task_list[next_idx].total_ticks++;
+        switch_to_stack((uint32_t*)&task_list[old_idx].esp, task_list[next_idx].esp);
+    }
+}
+
+void task_create_window(int tid, int x, int y, int w, int h) {
+    if (tid < 0 || tid >= MAX_TASKS) return;
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t sw = mbi->framebuffer_width;
+    uint32_t sh = mbi->framebuffer_height;
+
+    task_list[tid].window_ready = 0;
+    task_list[tid].has_window = 0;
+
+    if (task_list[tid].window_buffer == NULL) {
+        task_list[tid].window_buffer = (uint32_t*)kmalloc(sw * sh * 4);
+    }
+
+    if (task_list[tid].window_buffer) {
+        uint32_t count = sw * sh;
+        uint32_t val = 0x222222;
+        uint32_t* dest = task_list[tid].window_buffer;
+        __asm__ volatile ("rep stosl" : "+D"(dest), "+c"(count) : "a"(val) : "memory");
         
-        mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
+        task_list[tid].win_x = x;
+        task_list[tid].win_y = y;
+        task_list[tid].win_w = (w == 0) ? (int)sw : w;
+        task_list[tid].win_h = (h == 0) ? (int)sh : h;
+        task_list[tid].cursor_x = 0;
+        task_list[tid].cursor_y = 0;
+
+        task_list[tid].has_window = 1;
+        task_list[tid].window_ready = 1;
+
+        refresh_tiling_layout();
+        mark_task_dirty(tid, 0, 0, task_list[tid].win_w, task_list[tid].win_h);
     }
 }
 
@@ -75,17 +136,18 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
         if (task_list[i].state == 0) {
             kstrncpy((char*)task_list[i].name, name, 15);
             task_list[i].name[15] = '\0';
+            
+            task_list[i].has_window = 0;
+            task_list[i].window_ready = 0; 
+            task_list[i].window_buffer = NULL;
             task_list[i].total_ticks = 0;
             task_list[i].sleep_ticks = 0;
             task_list[i].is_dirty = 0; 
-            task_list[i].has_window = 0;
-            task_list[i].window_buffer = NULL;
             task_list[i].kbd_head = 0; 
             task_list[i].kbd_tail = 0;
 
             uint32_t stack_size = 16384; 
             void* raw_stack = kmalloc(stack_size + 0x1000);
-            
             if (!raw_stack) return ERR_TASK_STACK_OOM;
             
             task_list[i].stack_ptr = raw_stack;
@@ -114,51 +176,242 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
             return i; 
         }
     }
-
     return ERR_TASK_TABLE_FULL;
+}
+
+void kill_task(int id) {
+    if (id <= 0 || id >= MAX_TASKS) return;
+    task_list[id].window_ready = 0;
+
+    if (task_list[id].has_window) {
+        VESA_clear_region(task_list[id].win_x, task_list[id].win_y, 
+                          task_list[id].win_w + 4, task_list[id].win_h + 20);
+        vesa_dirty = 1;
+        VESA_flip();
+    }
+
+    if (task_list[id].window_buffer) {
+        kfree(task_list[id].window_buffer);
+        task_list[id].window_buffer = NULL;
+    }
+    if (task_list[id].stack_ptr) { kfree(task_list[id].stack_ptr); task_list[id].stack_ptr = NULL; }
+    if (task_list[id].code_ptr)  { kfree(task_list[id].code_ptr);  task_list[id].code_ptr  = NULL; }
+
+    task_list[id].state = 0;
+    task_list[id].has_window = 0;
+    task_list[id].is_dirty = 0; 
+}
+
+void compositor_task() {
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t sw = mbi->framebuffer_width;
+    uint32_t sh = mbi->framebuffer_height;
+    uint32_t* b_buffer = VESA_get_back_buffer();
+    int last_gui_count = -1; 
+
+    while(1) {
+        if (vesa_updating) { yield(); continue; }
+
+        if (pending_shell_spawn) {
+            pending_shell_spawn = 0;
+            int new_tid = spawn_task(shell_task, NULL, "shell");
+            if (new_tid != -1) {
+                task_create_window(new_tid, 0, 0, 0, 0);
+                keyboard_focus_tid = new_tid; 
+            }
+        }
+
+        int gui_tasks = 0;
+        int global_needs_update = 0;
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_ready) {
+                gui_tasks++;
+                if (task_list[i].is_dirty) global_needs_update = 1;
+            }
+        }
+
+        if (gui_tasks != last_gui_count) {
+            last_gui_count = gui_tasks;
+            refresh_tiling_layout();
+            
+            // THE FIX: Temporary local pointers so Assembly doesn't destroy our variables!
+            if (desktop_bg_buffer) {
+                uint32_t count = sw * sh;
+                uint32_t* tmp_dest = b_buffer;
+                uint32_t* tmp_src = desktop_bg_buffer;
+                __asm__ volatile ("rep movsl" : "+D"(tmp_dest), "+S"(tmp_src), "+c"(count) : : "memory");
+            } else {
+                uint32_t count = sw * sh;
+                uint32_t val = 0x000033;
+                uint32_t* tmp_dest = b_buffer;
+                __asm__ volatile ("rep stosl" : "+D"(tmp_dest), "+c"(count) : "a"(val) : "memory");
+            }
+
+            int tile_width = (gui_tasks > 0) ? sw / gui_tasks : sw;
+            int current_tile = 0;
+            
+            for (int i = 0; i < MAX_TASKS; i++) {
+                if (task_list[i].state != 0 && task_list[i].has_window && 
+                    task_list[i].window_ready && task_list[i].window_buffer) {
+                    
+                    int start_x = current_tile * tile_width;
+                    int current_tile_w = (current_tile == gui_tasks - 1) ? (int)(sw - start_x) : tile_width;
+
+                    for (uint32_t y = 0; y < sh; y++) {
+                        uint32_t* tmp_dest = &b_buffer[y * sw + start_x];
+                        uint32_t* tmp_src = &task_list[i].window_buffer[y * sw];
+                        uint32_t count = current_tile_w;
+                        __asm__ volatile ("rep movsl" : "+D"(tmp_dest), "+S"(tmp_src), "+c"(count) : : "memory");
+                    }
+                    
+                    uint32_t border_color = (keyboard_focus_tid == i) ? 0x00FFFF : 0x555555;
+                    for (int b = 0; b < WIN_BORDER; b++) {
+                        for (int x = 0; x < current_tile_w; x++) {
+                            b_buffer[(b * sw) + start_x + x] = border_color;             
+                            b_buffer[((sh - 1 - b) * sw) + start_x + x] = border_color;  
+                        }
+                        for (uint32_t y = 0; y < sh; y++) {
+                            b_buffer[(y * sw) + start_x + b] = border_color;             
+                            b_buffer[(y * sw) + start_x + current_tile_w - 1 - b] = border_color; 
+                        }
+                    }
+
+                    current_tile++;
+                }
+            }
+            vesa_dirty = 1; VESA_flip();
+            continue; 
+        }
+
+        if (global_needs_update) {
+            int tile_width = (gui_tasks > 0) ? sw / gui_tasks : sw;
+            int current_tile = 0;
+            int min_x = sw, min_y = sh, max_x = 0, max_y = 0;
+            int did_draw = 0;
+
+            for (int i = 0; i < MAX_TASKS; i++) {
+                if (task_list[i].state != 0 && task_list[i].has_window && 
+                    task_list[i].window_ready && task_list[i].window_buffer) {
+                    
+                    if (task_list[i].is_dirty) {
+                        int dx = task_list[i].dirty_x, dy = task_list[i].dirty_y;
+                        int dw = task_list[i].dirty_w, dh = task_list[i].dirty_h;
+                        task_list[i].is_dirty = 0;
+                        int start_x = current_tile * tile_width;
+                        int current_tile_w = (current_tile == gui_tasks - 1) ? (int)(sw - start_x) : tile_width;
+
+                        if (dx + dw > current_tile_w) dw = current_tile_w - dx;
+                        if (dy + dh > (int)sh) dh = sh - dy;
+
+                        if (dw > 0 && dh > 0) {
+                            for (int r = 0; r < dh; r++) {
+                                uint32_t* tmp_dest = &b_buffer[((dy + r) * sw) + (start_x + dx)];
+                                uint32_t* tmp_src = &task_list[i].window_buffer[((dy + r) * sw) + dx];
+                                uint32_t count = dw;
+                                __asm__ volatile ("rep movsl" : "+D"(tmp_dest), "+S"(tmp_src), "+c"(count) : : "memory");
+                            }
+
+                            uint32_t border_color = (keyboard_focus_tid == i) ? 0x00FFFF : 0x555555;
+                            for (int b = 0; b < WIN_BORDER; b++) {
+                                for (int x = 0; x < current_tile_w; x++) {
+                                    b_buffer[(b * sw) + start_x + x] = border_color;             
+                                    b_buffer[((sh - 1 - b) * sw) + start_x + x] = border_color;  
+                                }
+                                for (uint32_t y = 0; y < sh; y++) {
+                                    b_buffer[(y * sw) + start_x + b] = border_color;             
+                                    b_buffer[(y * sw) + start_x + current_tile_w - 1 - b] = border_color; 
+                                }
+                            }
+
+                            if (start_x + dx < min_x) min_x = start_x + dx;
+                            if (dy < min_y) min_y = dy;
+                            if (start_x + dx + dw > max_x) max_x = start_x + dx + dw;
+                            if (dy + dh > max_y) max_y = dy + dh;
+                            did_draw = 1;
+                        }
+                    }
+                    current_tile++;
+                }
+            }
+            if (did_draw) VESA_update_rect(min_x, min_y, max_x - min_x, max_y - min_y);
+        }
+        yield();
+    }
+}
+
+void shell_task() {
+    while (!task_list[current_task_idx].has_window || !task_list[current_task_idx].window_ready) {
+        yield(); 
+    }
+
+    char line[128];
+    int idx = 0;
+
+    task_list[current_task_idx].cursor_x = WIN_BORDER + 2;
+    task_list[current_task_idx].cursor_y = WIN_BORDER + 2;
+
+    shell_print("> ", 0xFFFF00); 
+    mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
+
+    while(1) {
+        volatile struct task* t = &task_list[current_task_idx];
+
+        if (t->kbd_head == t->kbd_tail) {
+            yield(); 
+            continue;
+        }
+
+        char c = t->kbd_buffer[t->kbd_tail];
+        t->kbd_tail = (t->kbd_tail + 1) % 64;
+
+        if (t->cursor_x >= t->win_w) {
+            t->cursor_x = WIN_BORDER + 2;
+            t->cursor_y += 10;
+        }
+
+        if (c == 4) { 
+            __asm__ volatile("mov $4, %%eax; int $0x80" : : : "eax");
+            while(1) yield();
+        }
+
+        if (c == '\n') {
+            line[idx] = '\0';
+            shell_print("\n", 0xFFFFFF); 
+            if (idx > 0) execute_command(line);
+            idx = 0;
+            shell_print("> ", 0xFFFF00);
+            
+            mark_task_dirty(current_task_idx, 0, 0, 4000, 4000); 
+        }
+        else if (c == '\b' && idx > 0) {
+            idx--;
+            if (t->cursor_x >= 8) {
+                t->cursor_x -= 8;
+                int x = t->cursor_x;
+                int y = t->cursor_y;
+                
+                // NO MORE ASSEMBLY CONFLICTS! Draw space directly to buffer.
+                shell_draw_char(' ', x, y, 0x222222, 0x222222);
+                mark_task_dirty(current_task_idx, x, y, 8, 8); 
+            }
+        }
+        else if (idx < 127 && c >= ' ') {
+            line[idx++] = c;
+            char str[2] = {c, '\0'};
+            
+            int start_x = t->cursor_x;
+            int start_y = t->cursor_y;
+            shell_print(str, 0xFFFFFF);
+            
+            mark_task_dirty(current_task_idx, start_x, start_y, 8, 8); 
+        }
+    }
 }
 
 uint32_t task_stacks[MAX_TASKS][1024];
 
 void yield() {
     __asm__ volatile("hlt");
-}
-
-void kill_task(int id) {
-    if (id <= 0 || id >= MAX_TASKS) return;
-
-    // Visual Cleanup
-    if (task_list[id].has_window) {
-        int border = 2;
-        int title_bar = 15;
-        int full_w = task_list[id].win_w + (border * 2);
-        int full_h = task_list[id].win_h + title_bar + border;
-        VESA_clear_region(task_list[id].win_x, task_list[id].win_y, full_w, full_h);
-        vesa_updating = 1;
-        vesa_dirty = 1;
-        VESA_flip();
-        vesa_updating = 0;
-    }
-
-    // MEMORY CLEANUP FIX: Always check and free pointers regardless of boolean flags!
-    if (task_list[id].window_buffer) {
-        kfree(task_list[id].window_buffer);
-        task_list[id].window_buffer = NULL;
-    }
-    
-    if (task_list[id].stack_ptr) { 
-        kfree(task_list[id].stack_ptr); 
-        task_list[id].stack_ptr = NULL; 
-    }
-    
-    if (task_list[id].code_ptr)  { 
-        kfree(task_list[id].code_ptr);  
-        task_list[id].code_ptr  = NULL; 
-    }
-
-    task_list[id].state = 0;
-    task_list[id].has_window = 0;
-    task_list[id].is_dirty   = 0; 
 }
 
 void idle_task_code() {
@@ -180,9 +433,7 @@ void task_timer() {
         seconds++;
         char buf[20];
         
-        // FIX: Divide by 4 to safely clear 20 bytes
         kmemset(buf, 0, 20 / 4); 
-        
         kstrcpy(buf, "TIMER: ");
         itoa(seconds, buf + 7, 10);
         VESA_print_at(buf, 900, 10, 0x00FFFF);
@@ -321,43 +572,6 @@ void refresh_tiling_layout() {
     }
 }
 
-void task_create_window(int tid, int x, int y, int w, int h) {
-    if (tid < 0 || tid >= MAX_TASKS) return;
-    struct multiboot_info* mbi = VESA_get_boot_info();
-    uint32_t full_size = mbi->framebuffer_width * mbi->framebuffer_height;
-
-    task_list[tid].win_x = x;
-    task_list[tid].win_y = y;
-    
-    task_list[tid].win_w = (w == 0) ? (int)mbi->framebuffer_width : w;
-    task_list[tid].win_h = (h == 0) ? (int)mbi->framebuffer_height : h;
-    
-    task_list[tid].cursor_x = 0;
-    task_list[tid].cursor_y = 0;
-
-    // DOUBLE-ALLOCATION LEAK FIX: Only allocate if one doesn't already exist.
-    if (task_list[tid].window_buffer == NULL) {
-        task_list[tid].window_buffer = (uint32_t*)kmalloc(full_size * 4);
-    }
-
-    if (task_list[tid].window_buffer == NULL) {
-        VESA_print("\n[OS] ERROR: Out of Memory for Task Window!\n", 0xFF0000);
-        task_list[tid].has_window = 0; 
-        return;
-    }
-
-    task_list[tid].has_window = 1;
-    for (uint32_t p = 0; p < full_size; p++) {
-        task_list[tid].window_buffer[p] = 0x222222;
-    }
-    
-    refresh_tiling_layout();
-    mark_task_dirty(tid, 0, 0, 4000, 4000); 
-}
-
-#define TEST_LABEL_X 100
-#define TEST_RESULT_X 450 
-
 void run_startup_tests() {
     uint32_t color_info   = 0x00FFFF; 
     uint32_t color_title  = 0xFFFF00; 
@@ -403,53 +617,39 @@ void run_startup_tests() {
     }
     cur_y += 25;
 
-   // --- NEW: VFS DIAGNOSTIC TEST ---
     VESA_print_at("[TEST] Virtual File System:", TEST_LABEL_X, cur_y, color_text);
     if (fs_root != NULL) {
-        // 1. Find the node via VFS
         vfs_node_t* test_node = vfs_finddir(fs_root, "BG.BMP");
-        
-        // 2. Ensure it was found AND that the generic 'read' pointer is attached
         if (test_node && test_node->read != 0) {
-            
-            // 3. Use the generic VFS interface to read the first 2 bytes
             uint8_t magic[3];
             vfs_read(test_node, 0, 2, magic);
-            magic[2] = '\0'; // Null terminate so we can check it safely
-            
-            // 4. A valid BMP file ALWAYS starts with the ASCII characters "BM"
+            magic[2] = '\0'; 
             if (magic[0] == 'B' && magic[1] == 'M') {
                 VESA_print_at("[ PASS ]", TEST_RESULT_X, cur_y, color_pass);
             } else {
                 VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
             }
-            kfree(test_node); // Memory safety
+            kfree(test_node); 
         } else {
             VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
             if (test_node) kfree(test_node);
         }
     } else {
-        // fs_root is null, meaning fat_vfs_mount() was never called
         VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
     }
     cur_y += 50;
-    // --------------------------------
-    // --------------------------------
 
     VESA_print_at("DIAGNOSTICS COMPLETE.", TEST_LABEL_X, cur_y, color_info); cur_y += 25;
-    VESA_print_at("PRESS ANY KEY TO BOOT KDXOS...", TEST_LABEL_X, cur_y, color_title);
+    VESA_print_at("BOOTING KDXOS...", TEST_LABEL_X, cur_y, color_title);
     
     vesa_dirty = 1; 
     VESA_flip();
 
-    while(has_key_in_buffer()) { get_key_from_buffer(); }
-    while(!has_key_in_buffer()) { yield(); }
-    get_key_from_buffer(); 
+    for (volatile uint32_t i = 0; i < 10000000; i++) {}
 }
-void init_multitasking() {
-    __asm__ volatile("cli"); 
 
-    multitasking_enabled = 1;
+void init_multitasking() {
+    multitasking_enabled = 0; 
 
     for (int i = 0; i < MAX_TASKS; i++) {
         task_list[i].state         = 0;
@@ -473,167 +673,19 @@ void init_multitasking() {
         load_desktop_wallpaper("BG.BMP");
     }
 
-    spawn_task(idle_task_code, NULL, "idle");
-    spawn_task(compositor_task, NULL, "wm");
-    spawn_task(klog_daemon, NULL, "log_daemon");
+    int t1 = spawn_task(idle_task_code, NULL, "idle");
+    int t2 = spawn_task(compositor_task, NULL, "wm");
+    int t3 = spawn_task(klog_daemon, NULL, "log_daemon");
+
+    if (t1 < 0 || t2 < 0 || t3 < 0) {
+        VESA_print_at("FATAL ERROR: KHEAP OOM. TASKS FAILED TO SPAWN!", 10, 10, 0xFF0000);
+        VESA_flip();
+        while(1) __asm__ volatile("hlt");
+    }
 
     current_task_idx = 0;
     refresh_tiling_layout();
-
-    __asm__ volatile("sti"); 
-}
-
-void compositor_task() {
-    struct multiboot_info* mbi = VESA_get_boot_info();
-    uint32_t sw = mbi->framebuffer_width;
-    uint32_t sh = mbi->framebuffer_height;
-    uint32_t* b_buffer = VESA_get_back_buffer();
-    int last_gui_count = -1; 
-
-    if (desktop_bg_buffer) {
-        kmemcpy32(b_buffer, desktop_bg_buffer, sw * sh);
-    } else {
-        for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
-    }
-    vesa_dirty = 1;
-    VESA_flip();
-
-    while(1) {
-        if (vesa_updating) { yield(); continue; }
-
-        if (pending_shell_spawn) {
-            pending_shell_spawn = 0;
-            __asm__ volatile("cli"); 
-            int new_tid = spawn_task(shell_task, NULL, "shell");
-            if (new_tid != -1) {
-                task_create_window(new_tid, 0, 0, 0, 0);
-                keyboard_focus_tid = new_tid; 
-            }
-            __asm__ volatile("sti"); 
-        }
-
-        int gui_tasks = 0;
-        int needs_update = 0;
-        for (int i = 0; i < MAX_TASKS; i++) {
-            if (task_list[i].state != 0 && task_list[i].has_window) {
-                gui_tasks++;
-                if (task_list[i].is_dirty) needs_update = 1;
-            }
-        }
-
-        if (gui_tasks != last_gui_count) {
-            last_gui_count = gui_tasks;
-            refresh_tiling_layout();
-            
-            if (desktop_bg_buffer) kmemcpy32(b_buffer, desktop_bg_buffer, sw * sh);
-            else for(uint32_t p=0; p < sw*sh; p++) b_buffer[p] = 0x000033;
-
-            int tile_width = (gui_tasks > 0) ? sw / gui_tasks : sw;
-            int current_tile = 0;
-            int border_thickness = 2;
-
-            for (int i = 0; i < MAX_TASKS; i++) {
-                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer) {
-                    int start_x = current_tile * tile_width;
-                    int current_tile_w = (current_tile == gui_tasks - 1) ? (int)(sw - start_x) : tile_width;
-
-                    for (uint32_t y = 0; y < sh; y++) {
-                        kmemcpy32(&b_buffer[y * sw + start_x], 
-                                  &task_list[i].window_buffer[y * sw], 
-                                  current_tile_w);
-                    }
-
-                    uint32_t border_color = (i == keyboard_focus_tid) ? 0x00FFFF : 0x444444;
-                    for (int by = 0; by < border_thickness; by++) {
-                        for (int bx = 0; bx < current_tile_w; bx++) {
-                            b_buffer[(by) * sw + start_x + bx] = border_color;
-                            b_buffer[(sh - 1 - by) * sw + start_x + bx] = border_color;
-                        }
-                    }
-                    for (uint32_t by = 0; by < sh; by++) {
-                        for (int bx = 0; bx < border_thickness; bx++) {
-                            b_buffer[by * sw + start_x + bx] = border_color;
-                            b_buffer[by * sw + start_x + current_tile_w - 1 - bx] = border_color;
-                        }
-                    }
-                    task_list[i].is_dirty = 0;
-                    current_tile++;
-                }
-            }
-            
-            vesa_dirty = 1;
-            VESA_flip();
-            yield();
-            continue;
-        }
-
-        if (needs_update) {
-            int tile_width = (gui_tasks > 0) ? sw / gui_tasks : sw;
-            int current_tile = 0;
-
-            int min_x = sw, min_y = sh, max_x = 0, max_y = 0;
-            int did_draw = 0;
-
-            for (int i = 0; i < MAX_TASKS; i++) {
-                if (task_list[i].state != 0 && task_list[i].has_window && task_list[i].window_buffer) {
-                    
-                    if (task_list[i].is_dirty) {
-                        
-                        int dx = task_list[i].dirty_x;
-                        int dy = task_list[i].dirty_y;
-                        int dw = task_list[i].dirty_w;
-                        int dh = task_list[i].dirty_h;
-                        
-                        task_list[i].is_dirty = 0;
-
-                        int start_x = current_tile * tile_width;
-                        int current_tile_w = (current_tile == gui_tasks - 1) ? (int)(sw - start_x) : tile_width;
-                        if (dx + dw > current_tile_w) dw = current_tile_w - dx;
-                        if (dy + dh > (int)sh) dh = sh - dy;
-
-                        if (dw > 0 && dh > 0) {
-                            for (int row = 0; row < dh; row++) {
-                                int win_offset = ((dy + row) * sw) + dx;
-                                int b_buffer_offset = ((dy + row) * sw) + (start_x + dx);
-                                kmemcpy32(&b_buffer[b_buffer_offset], 
-                                          &task_list[i].window_buffer[win_offset], 
-                                          dw);
-                            }
-
-                            uint32_t border_color = (i == keyboard_focus_tid) ? 0x00FFFF : 0x444444;
-                            int border_thickness = 2;
-                            for (int by = 0; by < border_thickness; by++) {
-                                for (int bx = 0; bx < current_tile_w; bx++) {
-                                    b_buffer[(by) * sw + start_x + bx] = border_color;
-                                    b_buffer[(sh - 1 - by) * sw + start_x + bx] = border_color;
-                                }
-                            }
-                            for (uint32_t by = 0; by < sh; by++) {
-                                for (int bx = 0; bx < border_thickness; bx++) {
-                                    b_buffer[by * sw + start_x + bx] = border_color;
-                                    b_buffer[by * sw + start_x + current_tile_w - 1 - bx] = border_color;
-                                }
-                            }
-
-                            if (start_x < min_x) min_x = start_x;
-                            if (0 < min_y) min_y = 0; 
-                            if (start_x + current_tile_w > max_x) max_x = start_x + current_tile_w;
-                            if ((int)sh > max_y) max_y = sh; 
-                            
-                            did_draw = 1;
-                        }
-                    }
-                    current_tile++;
-                }
-            }
-            
-            if (did_draw) {
-                VESA_update_rect(min_x, min_y, max_x - min_x, max_y - min_y);
-            }
-        }
-        
-        yield();
-    }
+    multitasking_enabled = 1; 
 }
 
 void klog_daemon() {
@@ -644,7 +696,6 @@ void klog_daemon() {
             
             fat_append_file("KDX.LOG", klog_ram_buffer);
             
-            // FIX: Divide by 4 to safely clear the 1024-byte RAM buffer
             kmemset(klog_ram_buffer, 0, 1024 / 4);
             klog_needs_sync = 0;
         }

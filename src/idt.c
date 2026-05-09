@@ -8,15 +8,20 @@
 
 uint32_t timer_frequency = 0;
 extern volatile struct task task_list[MAX_TASKS];
-extern int current_task_idx;
+extern volatile int current_task_idx;
 extern void isr0();
 volatile uint32_t system_ticks = 0;
 struct idt_entry idt[256];
 struct idt_ptr idtp;
 extern void isr128_stub();
-extern int keyboard_focus_tid;
+
+// THE FIX: Mark this volatile so the Compositor loop actually sees the changes!
+extern volatile int keyboard_focus_tid; 
+
 extern int vesa_updating;
 extern void idle_task_code();
+extern volatile int multitasking_enabled;
+volatile uint32_t next_stack_ptr = 0;
 
 char *exception_messages[] = {
     "Division By Zero", "Debug", "Non Maskable Interrupt", "Breakpoint",
@@ -26,7 +31,6 @@ char *exception_messages[] = {
 };
 
 // --- DIRTY RECTANGLE HELPER ---
-// This safely expands the bounding box of what needs to be redrawn
 void mark_task_dirty(int id, int x, int y, int w, int h) {
     volatile struct task* t = &task_list[id];
     if (!t->is_dirty) {
@@ -44,7 +48,6 @@ void mark_task_dirty(int id, int x, int y, int w, int h) {
         t->dirty_h = bottom - t->dirty_y;
     }
 }
-// ------------------------------
 
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_low  = (base & 0xFFFF);
@@ -58,6 +61,7 @@ int ctrl_state  = 0;
 int shift_state = 0;
 int alt_state   = 0;
 int altgr_state = 0;
+
 void pic_remap() {
     outb(0x20, 0x11); outb(0xA0, 0x11);
     outb(0x21, 0x20); outb(0xA1, 0x28);
@@ -103,17 +107,14 @@ void timer_init(uint32_t frequency) {
     outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
 }
 
-uint32_t next_stack_ptr = 0;
 extern uint32_t target_fps;
 
 void isr_handler(struct registers *r) {
     __asm__ volatile("cli");
     
-    // --- 1. PRESERVE SHELL UI STATE ---
     int old_shell_x = task_list[0].cursor_x;
     int old_shell_y = task_list[0].cursor_y;
 
-    // --- 2. DRAW PANIC SCREEN ---
     VESA_draw_rect(0, 0, 1024, 768, 0xAA0000);
     task_list[0].cursor_x = 10; 
     task_list[0].cursor_y = 10;
@@ -121,7 +122,6 @@ void isr_handler(struct registers *r) {
     VESA_print("             KDXOS EXCEPTION RECOVERY              \n", 0xFFFFFF);
     VESA_print("===================================================\n\n", 0xFFFFFF);
 
-    // --- 3. LOGGING ---
     char log_entry[256];
     log_entry[0] = '\0'; 
     kstrcat(log_entry, "\n[CRASH] Task: ");
@@ -139,19 +139,15 @@ void isr_handler(struct registers *r) {
     VESA_print(exception_messages[r->int_no], 0xFFFF00);
     VESA_print("\nEIP: 0x", 0xAAAAAA); VESA_print(hex_addr, 0xFFFFFF);
     
-    VESA_flip(); // Show the red screen
+    VESA_flip(); 
 
-    // --- 4. RECOVERY LOGIC ---
     int id = current_task_idx;
     if (id > 0) {
-        // Busy wait
         for(volatile uint32_t i = 0; i < 300000000; i++);
         
-        // Restore Shell Cursor
         task_list[0].cursor_x = old_shell_x;
         task_list[0].cursor_y = old_shell_y;
 
-        // Kill Task
         task_list[id].state = 0; 
         if (task_list[id].window_buffer) {
             kfree(task_list[id].window_buffer);
@@ -160,16 +156,14 @@ void isr_handler(struct registers *r) {
 
         refresh_tiling_layout(); 
         
-        // Mark all living tasks to fully redraw
         for(int i = 0; i < MAX_TASKS; i++) {
             if(task_list[i].state != 0) {
-                mark_task_dirty(i, 0, 0, 4000, 4000); // 4000 safely covers any screen
+                mark_task_dirty(i, 0, 0, 4000, 4000); 
             }
         }
         
         VESA_flip(); 
 
-        // --- 5. THE ESCAPE MANEUVER ---
         int next = 0; 
         current_task_idx = next;
         uint32_t new_esp = task_list[next].esp;
@@ -226,9 +220,9 @@ void timer_handler(struct registers *regs) {
     }
     outb(0x20, 0x20);
 }
-int is_extended = 0; // State tracker for multi-byte scancodes
 
-// Unique internal IDs for the arrows (outside ASCII range)
+int is_extended = 0; 
+
 #define KBD_UP    11
 #define KBD_DOWN  12
 #define KBD_LEFT  13
@@ -237,20 +231,17 @@ int is_extended = 0; // State tracker for multi-byte scancodes
 void keyboard_handler(struct registers *regs) {
     uint8_t scancode = inb(0x60);
 
-    // 1. Detect Extended Scancode prefix
     if (scancode == 0xE0) {
         is_extended = 1;
         outb(0x20, 0x20);
         return;
     }
 
-    // 2. Handle Key Releases
     if (scancode & 0x80) {
         uint8_t released = scancode & 0x7F;
         if (released == 0x1D) ctrl_state = 0;
         else if (released == 0x2A || released == 0x36) shift_state = 0;
         else if (released == 0x38) {
-            // THE FIX: Check if it's Right Alt (AltGR) or Left Alt
             if (is_extended) altgr_state = 0;
             else alt_state = 0;
         }
@@ -259,70 +250,52 @@ void keyboard_handler(struct registers *regs) {
         return;
     }
 
-    // 3. Process the Scancode
     char c = 0;
     if (is_extended) {
-        // Handle extended keys (Arrows)
         if      (scancode == 0x48) c = KBD_UP;
         else if (scancode == 0x50) c = KBD_DOWN;
         else if (scancode == 0x4B) c = KBD_LEFT;
         else if (scancode == 0x4D) c = KBD_RIGHT;
-        
-        // THE FIX: Handle AltGR press (0xE0 + 0x38)
-        else if (scancode == 0x38) {
-            altgr_state = 1;
-        }
-        
-        is_extended = 0; // Reset extended flag after processing
+        else if (scancode == 0x38) altgr_state = 1;
+        is_extended = 0; 
     } else {
-        // Standard keys (No E0 prefix)
         if      (scancode == 0x1D) ctrl_state = 1;
         else if (scancode == 0x2A || scancode == 0x36) shift_state = 1;
-        else if (scancode == 0x38) alt_state = 1; // Left Alt
-        else if (scancode == 0x3B) keyboard_focus_tid = 0; // F1
+        else if (scancode == 0x38) alt_state = 1; 
+        else if (scancode == 0x3B) keyboard_focus_tid = 0; 
         
-// --- HOTKEY: CTRL + TAB (Cycle Focus) ---
-else if (scancode == 0x0F && ctrl_state) {
-    int start = keyboard_focus_tid;
-    int next = (start + 1) % MAX_TASKS;
+        // --- HOTKEY: CTRL + TAB (Cycle Focus) ---
+        else if (scancode == 0x0F && ctrl_state) {
+            int start = keyboard_focus_tid;
+            int next = (start + 1) % MAX_TASKS;
 
-    // Search for the next available task that has a window
-    while (next != start) {
-        if (task_list[next].state != 0 && task_list[next].has_window) {
-            
-            // 1. Mark the old focused window as dirty (to update border to Grey)
-            mark_task_dirty(keyboard_focus_tid, 0, 0, 
-                            task_list[keyboard_focus_tid].win_w, 
-                            task_list[keyboard_focus_tid].win_h);
-            
-            // 2. Switch focus
-            keyboard_focus_tid = next;
-            
-            // 3. Mark the new focused window as dirty (to update border to Cyan)
-            mark_task_dirty(keyboard_focus_tid, 0, 0, 
-                            task_list[keyboard_focus_tid].win_w, 
-                            task_list[keyboard_focus_tid].win_h);
-            
-            // Wake up the task if it was blocking on getchar()
-            if (task_list[next].state == 3) task_list[next].state = 1;
-            
-            break;
+            while (next != start) {
+                if (task_list[next].state != 0 && task_list[next].has_window) {
+                    
+                    // 1. Mark the old focused window fully dirty to redraw its Grey border
+                    mark_task_dirty(keyboard_focus_tid, 0, 0, 4000, 4000); 
+                    
+                    // 2. Switch focus
+                    keyboard_focus_tid = next;
+                    
+                    // 3. Mark the new focused window fully dirty to redraw its Cyan border
+                    mark_task_dirty(keyboard_focus_tid, 0, 0, 4000, 4000); 
+                    
+                    if (task_list[next].state == 3) task_list[next].state = 1;
+                    break;
+                }
+                next = (next + 1) % MAX_TASKS;
+            }
         }
-        next = (next + 1) % MAX_TASKS;
-    }
-}
         else if (scancode == 0x1C && alt_state) { 
             extern int pending_shell_spawn; 
             pending_shell_spawn = 1; 
         }
-        
-        // Regular characters - Pass 3 states now: Shift and AltGR
         else {
             c = scancode_to_ascii(scancode, shift_state, altgr_state);
         }
     }
 
-    // 4. Send to task buffer (Remains same)
     if (c != 0) {
         if (ctrl_state && c >= 'a' && c <= 'z') c = c - 'a' + 1;
 
@@ -380,7 +353,6 @@ void syscall_handler(struct registers *regs) {
 
     struct multiboot_info* mbi = VESA_get_boot_info();
     uint32_t sw = mbi->framebuffer_width;
-    uint32_t sh = mbi->framebuffer_height;
     int id = current_task_idx;
     int border = WIN_BORDER;
 
@@ -395,22 +367,17 @@ void syscall_handler(struct registers *regs) {
         
         for (int row = 0; row < 8; row++) {
             for (int col = 0; col < 8; col++) {
-                // Remove redundant nested checks to increase speed
                 if (glyph[row] & (1 << (7 - col))) {
                     int draw_x = x + col;
                     int draw_y = y + row;
 
-                    // Bounds check against the task's window dimensions
                     if (draw_x >= 0 && draw_x < task_list[id].win_w && 
                         draw_y >= 0 && draw_y < task_list[id].win_h) {
-                        
-                        // Use sw (physical screen width) as the stride
                         task_list[id].window_buffer[(draw_y * sw) + draw_x] = 0xFFFFFF;
                     }
                 }
             }
         }
-        // Immediately notify compositor of the change
         mark_task_dirty(id, x, y, 8, 8);
     }
 }  else if (regs->eax == 2) { // GET_TICKS
@@ -458,7 +425,6 @@ void syscall_handler(struct registers *regs) {
                     }
                 }
             }
-            // Expand the bounding box to cover the drawn rectangle
             mark_task_dirty(id, rx, ry, rw, rh);
         }
     }
@@ -492,12 +458,12 @@ void syscall_handler(struct registers *regs) {
             }
             chars_printed++;
         }
-        // Mark the width of the entire string as dirty
         mark_task_dirty(id, sx, sy, chars_printed * 8, 8);
     }
     else if (regs->eax == 8) { // CREATE_WINDOW
         task_list[id].has_window = 1;
         if (task_list[id].window_buffer == NULL) {
+            uint32_t sh = mbi->framebuffer_height;
             task_list[id].window_buffer = (uint32_t*)kmalloc(sw * sh * 4);
             if (!task_list[id].window_buffer) {
                 kprintf_unsync("OOM: Window failed\n");
@@ -511,54 +477,55 @@ void syscall_handler(struct registers *regs) {
         task_list[id].cursor_y = 0;
         refresh_tiling_layout();
         
-        // A new window needs a full initial redraw
-        mark_task_dirty(id, 0, 0, sw, sh);
+        mark_task_dirty(id, 0, 0, sw, mbi->framebuffer_height);
     }
-else if (regs->eax == 9) { // PRINT_NUM (Variable)
-    uint32_t offset = regs->ebx;
-    
-    // FIX: Because the assembler writes to absolute physical addresses 
-    // (e.g. 3000), we must read from that absolute address to get the variable.
-    uint32_t* var_ptr = (uint32_t*)offset; 
-    uint32_t actual_val = *var_ptr;
+    else if (regs->eax == 9) { // PRINT_NUM (Variable)
+        uint32_t offset = regs->ebx;
+        uint32_t* var_ptr = (uint32_t*)offset; 
+        uint32_t actual_val = *var_ptr;
 
-    char buf[16];
-    itoa(actual_val, buf, 10);
-    
-    if (task_list[id].has_window && task_list[id].window_buffer) {
-        int x = regs->ecx + border; 
-        int y = regs->edx + border;
-        uint32_t color = regs->edi;
+        char buf[16];
+        itoa(actual_val, buf, 10);
+        
+        if (task_list[id].has_window && task_list[id].window_buffer) {
+            int x = regs->ecx + border; 
+            int y = regs->edx + border;
+            uint32_t color = regs->edi;
 
-        for (int i = 0; buf[i] != '\0'; i++) {
-            extern uint8_t font8x8_basic[128][8];
-            uint8_t* glyph = font8x8_basic[(unsigned char)buf[i]];
-            int cur_x = x + (i * 8);
+            for (int i = 0; buf[i] != '\0'; i++) {
+                extern uint8_t font8x8_basic[128][8];
+                uint8_t* glyph = font8x8_basic[(unsigned char)buf[i]];
+                int cur_x = x + (i * 8);
 
-            for (int row = 0; row < 8; row++) {
-                for (int col = 0; col < 8; col++) {
-                    if (glyph[row] & (1 << (7 - col))) {
-                        int dx = cur_x + col;
-                        int dy = y + row;
-                        if (dx >= 0 && dx < task_list[id].win_w && 
-                            dy >= 0 && dy < task_list[id].win_h) {
-                            task_list[id].window_buffer[(dy * sw) + dx] = color;
+                for (int row = 0; row < 8; row++) {
+                    for (int col = 0; col < 8; col++) {
+                        if (glyph[row] & (1 << (7 - col))) {
+                            int dx = cur_x + col;
+                            int dy = y + row;
+                            if (dx >= 0 && dx < task_list[id].win_w && 
+                                dy >= 0 && dy < task_list[id].win_h) {
+                                task_list[id].window_buffer[(dy * sw) + dx] = color;
+                            }
                         }
                     }
                 }
             }
+            mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
         }
-        mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
     }
-}  // Syscall 10: Non-blocking Keyboard Read GETKEY
-    if (regs->eax == 10) {
-        extern int has_key_in_buffer();
-        extern char get_key_from_buffer();
-        
-        if (has_key_in_buffer()) {
-            regs->eax = (uint32_t)get_key_from_buffer();
+    
+    // --- THE SYSCALL 10 FIX ---
+    else if (regs->eax == 10) { 
+        volatile struct task* t = &task_list[id];
+
+        // Direct memory read. Bypasses the old broken functions!
+        if (t->kbd_head != t->kbd_tail) {
+            char c = t->kbd_buffer[t->kbd_tail];
+            t->kbd_tail = (t->kbd_tail + 1) % 64;
+            regs->eax = (uint32_t)c;
         } else {
             regs->eax = 0; // Return 0 if no key is pressed
         }
         return;
-    }}
+    }
+}

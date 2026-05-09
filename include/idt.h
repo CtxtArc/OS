@@ -8,7 +8,6 @@
 
 // For the Assembler, we would define these as constants:
 // .define SYS_DRAW_CHAR 1
-extern int multitasking_enabled;
 extern uint32_t timer_frequency; // Global variable to store the frequency
 struct idt_entry {
     uint16_t base_low;    // Lower 16 bits of handler function address

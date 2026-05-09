@@ -46,6 +46,8 @@ struct task {
     int win_h;              // Window Height
     int cursor_x;
     int cursor_y;
+    
+    volatile int window_ready;
 };
 
 void init_multitasking();
@@ -73,6 +75,8 @@ extern int vesa_dirty; // Useful for the shell to trigger refreshes
 void klog_daemon();
 void run_startup_tests();
 void compositor_task();
-
+void schedule();
 void suicide_task();
+
+void shell_print(char* str, uint32_t color);
 #endif

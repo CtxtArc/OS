@@ -159,8 +159,7 @@ isr128_stub:
     push esp            
     call syscall_handler
     
-    ; Save return value from EAX into the stack frame for popa
-    mov [esp + 32], eax 
+    ; THE FIX: Removed the destructive 'mov [esp + 32], eax' line here!
 
     add esp, 4          
     

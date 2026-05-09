@@ -1,8 +1,8 @@
 #include "kheap.h"
 #include "lib.h"
 
-// Set the heap to 64MB so we can easily hold multiple 1024x768x4 window buffers
-#define HEAP_INITIAL_SIZE (64 * 1024 * 1024) 
+// Set the heap to 128MB so we can easily hold multiple 1024x768x4 window buffers
+#define HEAP_INITIAL_SIZE (128 * 1024 * 1024) 
 
 // The Linker provides this symbol
 extern uint32_t end; 
