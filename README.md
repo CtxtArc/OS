@@ -108,7 +108,7 @@ make run
 ```
 
 ## 📂 Project Structure
-
+```
 OS_Root/
 ├── assets/             # Media, fonts, or external assets (e.g., BG.BMP)
 ├── bin/                # Compiled userland binaries (e.g., SPIN2.BIN)
@@ -141,7 +141,7 @@ OS_Root/
     ├── shell.c         # Graphical command-line interface & commands
     ├── task.c          # Preemptive multitasking scheduler
     └── vesa.c          # VESA Graphics driver and double-buffering
-
+```
 ## 🚀 Future Roadmap
 
 * [ ] Virtual File System (VFS) abstraction layer.
