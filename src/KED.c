@@ -15,20 +15,25 @@ extern void mark_task_dirty(int id, int x, int y, int w, int h);
 extern void shell_print(char* str, uint32_t color);
 extern void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg);
 
-static char ked_target_file[16];
 
-void KED_init(const char* filename) {
-    kstrncpy(ked_target_file, filename, 15);
-    ked_target_file[15] = '\0';
-}
 
 void KED_task() {
     // 1. LOCAL STATE INITIALIZATION
     // Capture global filename into local stack to prevent ghosting/concurrency issues
     char local_filename[16];
-    kstrncpy(local_filename, ked_target_file, 15);
-    local_filename[15] = '\0';
-    kmemset(ked_target_file, 0, 16); 
+    // Grab the filename the Shell safely passed to us via code_ptr
+    char* passed_filename = (char*)task_list[current_task_idx].code_ptr;
+    
+    if (passed_filename) {
+        kstrncpy(local_filename, passed_filename, 15);
+        local_filename[15] = '\0';
+        
+        // Free the memory the shell allocated for this string
+        kfree(passed_filename);
+        task_list[current_task_idx].code_ptr = NULL; 
+    } else {
+        kstrcpy(local_filename, "UNTITLED.TXT"); // Fallback
+    } 
 
     char* text_buffer = (char*)kmalloc(4096);
     if (!text_buffer) {
@@ -36,7 +41,7 @@ void KED_task() {
         __asm__ volatile("mov $4, %eax; int $0x80");
         while(1) yield();
     }
-    kmemset(text_buffer, 0, 4096);
+    kmemset(text_buffer, 0, 4096/4);
 
     // 2. LAYOUT SYNCHRONIZATION
     // Wait for the Window Manager/Compositor to assign a tiled width.
@@ -88,6 +93,7 @@ void KED_task() {
             if (c == 19) {      // Ctrl+S (Save)
                 fat_write_file(local_filename, text_buffer);
                 continue;
+                
             }
 
             // Navigation

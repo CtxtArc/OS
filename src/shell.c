@@ -22,6 +22,9 @@ extern uint32_t target_fps;
 extern int keyboard_focus_tid;
 extern int current_task_idx;
 char shell_cwd[256] = "/";
+     extern void KED_init(const char* filename); 
+            extern void KED_task();                     
+   
 
 void update_shell_cwd(char* target) {
     if (kstrcasecmp(target, "/") == 0) {
@@ -326,19 +329,19 @@ void execute_command(char* input) {
             }
         }
     }
-    // --- NATIVE APPS & TASKS ---
-    else if (kstrcasecmp(input, "KED") == 0) {
-        if (arg) {
-            extern void KED_init(const char* filename); 
-            extern void KED_task();                     
-            KED_init(arg);
-            int tid = spawn_task(KED_task, NULL, "KED");
-            task_create_window(tid, 0, 0, 0, 0);
-            shell_print("Text Editor Spawned.\n", COLOR_GREEN);
-        } else {
-            shell_print("Usage: KED <filename>\n", COLOR_RED);
-        }
+   
+       else if (kstrcasecmp(input, "KED") == 0) {
+    if (arg) {
+        char* fn = kmalloc(16);
+        kstrncpy(fn, arg, 15);
+        fn[15] = '\0';
+        int tid = spawn_task(KED_task, fn, "KED");  // fn goes into code_ptr
+        task_create_window(tid, 0, 0, 0, 0);
+        shell_print("Text Editor Spawned.\n", COLOR_GREEN);
+    } else {
+        shell_print("Usage: KED <filename>\n", COLOR_RED);
     }
+}
     else if (kstrcasecmp(input, "TOP") == 0) {
         extern void run_top();
         int tid = spawn_task(run_top, NULL, "TOP");
@@ -365,7 +368,7 @@ void execute_command(char* input) {
                 char* file_data = fat_load_file(entry);
                 void* raw_code = kmalloc(size + 4096);
                 
-                kfree(entry); 
+                //kfree(entry); 
                 
                 if (raw_code) {
                     uint32_t aligned_code = ((uint32_t)raw_code + 0xFFF) & 0xFFFFF000;
@@ -425,7 +428,7 @@ void shell_compile(const char* arg) {
     char* source_buf = (char*)fat_load_file(file);
     uint8_t* binary_buf = (uint8_t*)kmalloc(8192);
     
-    kfree(file); // FIX: Free the fat_search entry
+    //kfree(file); // FIX: Free the fat_search entry
 
     label_count = 0;
     rt_var_count = 0;

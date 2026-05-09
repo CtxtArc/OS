@@ -13,7 +13,7 @@ static uint32_t first_fat_sector;
 static uint32_t current_dir_cluster = 0; // 0 means Root Directory
 static uint8_t global_fat_buf[512] __attribute__((aligned(16)));
 static uint8_t raw_io_buffer[512] __attribute__((aligned(16)));
-
+volatile int fat_disk_busy = 0;
 
 unsigned char spinner_code[] = {
     // 1. Get Ticks (Syscall 2)
@@ -136,7 +136,7 @@ void fat_init() {
     uint32_t first_root_dir_sector = first_fat_sector + (bpb.num_fats * bpb.fat_size_16);
     first_data_sector = first_root_dir_sector + root_dir_sectors;
 header_t* tail = (header_t*)0xB00218; // The address of your B2
-tail->size = (16 * 1024 * 1024) - ((uint32_t)tail - 0x800000) - sizeof(header_t);
+tail->size = (64 * 1024 * 1024) - ((uint32_t)tail - 0x800000) - sizeof(header_t); // 64MB
 tail->is_free = 1;
 tail->next = NULL;
 
@@ -191,34 +191,6 @@ void* fat_load_file(struct fat_dir_entry* entry) {
     return (void*)buffer;
 }
 
-struct fat_dir_entry* fat_search(const char* filename) {
-    static struct fat_dir_entry result;
-    uint8_t buffer[512];
-    
-    // FIX: Use the helper that looks at current_dir_cluster!
-    uint32_t search_lba = get_current_dir_lba();
-
-    // Determine how many sectors to search
-    // Root has a fixed size, subdirectories are (initially) 1 cluster
-    uint32_t sectors_to_search = (current_dir_cluster == 0) ? root_dir_sectors : bpb.sectors_per_cluster;
-
-    for (uint32_t s = 0; s < sectors_to_search; s++) {
-        ide_read_sector(search_lba + s, buffer);
-        struct fat_dir_entry* entries = (struct fat_dir_entry*)buffer;
-
-        for (int i = 0; i < 16; i++) { // 16 entries per 512-byte sector
-            if (entries[i].name[0] == 0x00) return NULL; // End of directory
-            if ((unsigned char)entries[i].name[0] == 0xE5) continue; // Deleted
-            if (entries[i].attr == 0x0F) continue; // Skip LFN junk
-
-            if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
-                kmemcpy(&result, &entries[i], sizeof(struct fat_dir_entry));
-                return &result;
-            }
-        }
-    }
-    return NULL;
-}
 
 void fat_cd(const char* path) {
     // 1. Use the Path Walker to find the cluster
@@ -236,6 +208,38 @@ void fat_cd(const char* path) {
     }
 }
 
+struct fat_dir_entry* fat_search(const char* filename) {
+    uint8_t buffer[512];
+    
+    fat_disk_busy = 0; 
+
+    uint32_t search_lba = get_current_dir_lba();
+    uint32_t sectors_to_search = (current_dir_cluster == 0) ? root_dir_sectors : bpb.sectors_per_cluster;
+
+    for (uint32_t s = 0; s < sectors_to_search; s++) {
+        ide_read_sector(search_lba + s, buffer);
+        struct fat_dir_entry* entries = (struct fat_dir_entry*)buffer;
+
+        for (int i = 0; i < 16; i++) {
+            if (entries[i].name[0] == 0x00) return NULL; // End of directory
+            if ((unsigned char)entries[i].name[0] == 0xE5) continue; // Deleted
+            if (entries[i].attr == 0x0F) continue; // Skip LFN junk
+
+            if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
+                
+                // THREAD-SAFE FIX: Allocate memory for this specific task
+                struct fat_dir_entry* out = (struct fat_dir_entry*)kmalloc(sizeof(struct fat_dir_entry));
+                
+                // Safety check in case we are out of memory
+                if (out) {
+                    kmemcpy(out, &entries[i], sizeof(struct fat_dir_entry));
+                }
+                return out;
+            }
+        }
+    }
+    return NULL;
+}
 
 void fat_ls() {
     uint8_t buffer[512];
@@ -1073,7 +1077,6 @@ void fat_append_file(const char* filename, const char* data) {
     // 2. Handle the "Slack Space" in the last sector
     // Calculate how many bytes into the last cluster the current file ends
     uint32_t bytes_in_last_cluster = old_size % (bpb.sectors_per_cluster * 512);
-    uint32_t slack_in_cluster = (bpb.sectors_per_cluster * 512) - bytes_in_last_cluster;
     
     uint32_t data_offset = 0;
 
