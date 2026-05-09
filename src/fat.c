@@ -266,9 +266,11 @@ void fat_ls() {
         // 2. Print Name (using the specific color)
         for (int n = 0; n < 8; n++) {
             if (entry[i].name[n] != ' ') {
+char c = entry[i].name[n];
                 // Assuming you have a kputc_color or similar, 
                 // otherwise we use kprintf_color with %c
-                kprintf_color(color, "%c", entry[i].name[n]);
+                if (c >= 'A' && c <= 'Z') c += 32;
+                kprintf_color(color, "%c", c);
             }
         }
 
@@ -278,8 +280,13 @@ void fat_ls() {
             if (entry[i].ext[0] != ' ' || entry[i].ext[1] != ' ' || entry[i].ext[2] != ' ') {
                 kprintf_color(color, ".");
                 for (int e = 0; e < 3; e++) {
-                    if (entry[i].ext[e] != ' ') kprintf_color(color, "%c", entry[i].ext[e]);
-                }
+        if (entry[i].ext[e] != ' ') {
+            char c = entry[i].ext[e];
+            // ADD THIS: Convert to lowercase for display
+            if (c >= 'A' && c <= 'Z') c += 32;
+            kprintf_color(color, "%c", c);
+        }
+    }
             }
         }
 
@@ -304,7 +311,7 @@ void fat_ls_cluster(uint32_t cluster) {
     ide_read_sector(dir_lba, buffer);
     struct fat_dir_entry* entry = (struct fat_dir_entry*)buffer;
     
-    kprintf_color(0xAAAAAA, "Directory Listing (Cluster %d):\n", cluster);
+    //kprintf_color(0xAAAAAA, "Directory Listing (Cluster %d):\n", cluster);
 
     for (int i = 0; i < 16; i++) {
         if (entry[i].name[0] == 0x00) break;
@@ -324,7 +331,11 @@ void fat_ls_cluster(uint32_t cluster) {
 
         // 3. Print the name using the entry color
         for (int n = 0; n < 8; n++) {
-            if (entry[i].name[n] != ' ') kprintf_color(entry_color, "%c", entry[i].name[n]);
+            if (entry[i].name[n] != ' '){
+char c = entry[i].name[n];
+                if (c >= 'A' && c <= 'Z') c += 32; // Convert to lowercase
+                kprintf_color(entry_color, "%c", c);
+      } 
         }
 
         // 4. Dot and Extension logic (Skip dot for '.' and '..')
@@ -332,7 +343,11 @@ void fat_ls_cluster(uint32_t cluster) {
             if (entry[i].ext[0] != ' ' || entry[i].ext[1] != ' ' || entry[i].ext[2] != ' ') {
                 kprintf_color(entry_color, ".");
                 for (int e = 0; e < 3; e++) {
-                    if (entry[i].ext[e] != ' ') kprintf_color(entry_color, "%c", entry[i].ext[e]);
+                    if (entry[i].ext[e] != ' ') {
+                        char c = entry[i].ext[e];
+                        if (c >= 'A' && c <= 'Z') c += 32; // Convert to lowercase
+                        kprintf_color(entry_color, "%c", c);
+                    }
                 }
             }
         }
@@ -522,7 +537,7 @@ void fat_mkdir(const char* dirname) {
         for (int i = 0; i < 3; i++) entries[slot].ext[i] = ' ';
         for (int i = 0; i < 8 && dirname[i] != '\0'; i++) {
             char c = dirname[i];
-            if (c >= 'a' && c <= 'z') c -= 32; 
+            if (c >= 'a' && c <= 'z') c -= 32;
             entries[slot].name[i] = c;
         }
 
@@ -797,7 +812,12 @@ void fat_print_path_recursive(uint16_t cluster) {
         if (entries[i].first_cluster_low == cluster) {
             // Found this folder's entry! Print its name.
             for (int n = 0; n < 8 && entries[i].name[n] != ' '; n++) {
-                kputc(entries[i].name[n]);
+                char c = entries[i].name[n];
+                
+                // ADD THIS: Convert to lowercase for display
+                if (c >= 'A' && c <= 'Z') c += 32; 
+                
+                kputc(c); // Print the lowercase character
             }
             return; 
         }
@@ -1171,31 +1191,28 @@ vfs_node_t* fat_vfs_finddir(vfs_node_t* node, char* name) {
     uint32_t search_cluster = (uint32_t)node->device_specific_data;
     struct fat_dir_entry* entry = fat_search_in(name, search_cluster);
 
-    if (!entry) return NULL; // Not found
+    if (!entry) return NULL;
 
-    // Allocate a new VFS node for the caller
     vfs_node_t* out = (vfs_node_t*)kmalloc(sizeof(vfs_node_t));
     kstrcpy(out->name, name);
     out->size = entry->size;
     
+    // Attach the generic finddir so we can navigate subfolders
+    out->finddir = fat_vfs_finddir; 
+    
     if (entry->attr & 0x10) {
         out->flags = FS_DIRECTORY;
-        out->read = 0; // Directories use finddir, not read
+        out->read = 0;
+        out->write = 0;
     } else {
         out->flags = FS_FILE;
-        out->read = fat_vfs_read; // Attach our FAT reader!
-        out->write = fat_vfs_write; // NEW: Attach the write wrapper!
+        out->read = fat_vfs_read; 
+        out->write = fat_vfs_write; // Correctly attach the write wrapper
     }
     
-    out->write = 0; // We will add the write wrapper later
-    out->finddir = fat_vfs_finddir; // Recursion! Attach the finder!
-    
-    // Store the FAT cluster secretly inside the VFS node
     out->device_specific_data = (void*)(uint32_t)entry->first_cluster_low;
-
     return out;
 }
-
 // 3. The Initial Mount Function
 void fat_vfs_mount() {
     fs_root = (vfs_node_t*)kmalloc(sizeof(vfs_node_t));

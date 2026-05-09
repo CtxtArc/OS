@@ -33,21 +33,24 @@ disk: disk.img
 	@echo "Injecting files into disk.img..."
 	mkdir -p tests assets
 	python3 -c "print('A' * 512 + 'B' * 512)" > tests/large.txt
-	# Inject tests/ folder text files
-	-mmd -i disk.img ::/TESTS
+	
+	# Create the /tests directory on the image (lowercase)
+	-mmd -i disk.img ::/tests
+	
+	# Inject tests/ folder files preserving original case
 	for file in tests/*.txt; do \
-		filename=$$(basename $$file | tr 'a-z' 'A-Z'); \
-		mcopy -o -i disk.img $$file ::/TESTS/$$filename; \
+		mcopy -o -i disk.img $$file ::/tests/; \
 	done
-	# Inject BG.BMP from host assets/ to disk root
-	@if [ -f assets/BG.BMP ]; then \
+	
+	# Inject bg.bmp preserving case
+	@if [ -f assets/bg.bmp ]; then \
+		echo "Injecting assets/bg.bmp into disk root..."; \
+		mcopy -o -i disk.img assets/bg.bmp ::/bg.bmp; \
+	elif [ -f assets/BG.BMP ]; then \
 		echo "Injecting assets/BG.BMP into disk root..."; \
 		mcopy -o -i disk.img assets/BG.BMP ::/BG.BMP; \
-	elif [ -f assets/bg.bmp ]; then \
-		echo "Injecting assets/bg.bmp into disk root as BG.BMP..."; \
-		mcopy -o -i disk.img assets/bg.bmp ::/BG.BMP; \
 	else \
-		echo "WARNING: assets/BG.BMP not found! OS will fallback to solid color."; \
+		@echo "WARNING: No background image found in assets/! OS will fallback to solid color."; \
 	fi
 
 

@@ -20,6 +20,29 @@ extern uint32_t timer_frequency;
 extern uint32_t target_fps;
 extern int keyboard_focus_tid;
 extern int current_task_idx;
+char shell_cwd[256] = "/";
+
+void update_shell_cwd(char* target) {
+    if (kstrcasecmp(target, "/") == 0) {
+        kstrcpy(shell_cwd, "/");
+    } else if (kstrcasecmp(target, "..") == 0) {
+        int len = kstrlen(shell_cwd);
+        if (len > 1) { // Don't do anything if we are already at "/"
+            for (int i = len - 1; i >= 0; i--) {
+                if (shell_cwd[i] == '/') {
+                    shell_cwd[i] = '\0';
+                    if (i == 0) kstrcpy(shell_cwd, "/"); // Return to root
+                    break;
+                }
+            }
+        }
+    } else {
+        if (kstrcmp(shell_cwd, "/") != 0) {
+            kstrcat(shell_cwd, "/");
+        }
+        kstrcat(shell_cwd, target);
+    }
+}
 
 // Bring in the dirty rectangle helper
 extern void mark_task_dirty(int id, int x, int y, int w, int h);
@@ -49,44 +72,131 @@ void execute_command(char* input) {
     }
 
     // --- SYSTEM & INFO ---
-    if (kstrcmp(input, "HELP") == 0) {
+    if (kstrcasecmp(input, "HELP") == 0) {
         VESA_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL SLEEP RUN TOP UPTIME STAT REBOOT CRASH ECHO SET_FPS TIMER GAME HEXDUMP WRITE COMPILE KED\n", COLOR_WHITE);
     }
-    else if (kstrcmp(input, "SUICIDE") == 0) {
+    else if (kstrcasecmp(input, "SUICIDE") == 0) {
         kprintf("Spawning SUICIDE task... watch the logs.\n");
         spawn_task(suicide_task,NULL, "suicide_app");
     }
-else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
+else if (kstrcasecmp(input, "CAT") == 0) { 
         if (arg) {
-            vfs_node_t* file = NULL;
-            
-            if (kstrcmp(arg, "/dev/clock") == 0) {
-                file = (vfs_node_t*)kmalloc(sizeof(vfs_node_t));
-                kstrcpy(file->name, "/dev/clock");
-                file->flags = FS_FILE;
-                file->size = 64; 
-                file->read = dev_clock_read; 
-            } else {
-                file = vfs_finddir(fs_current_dir, arg);
-            }
+            // NEW: Use the path walker instead of just checking the immediate directory!
+            extern vfs_node_t* vfs_walk_path(char* path); // Quick extern
+            vfs_node_t* file = vfs_walk_path(arg);
             
             if (file && (file->flags & FS_FILE)) {
                 char* buf = kmalloc(file->size + 1);
                 uint32_t bytes_read = vfs_read(file, 0, file->size, (uint8_t*)buf);
                 buf[bytes_read] = '\0'; 
                 
-                VESA_print(buf, COLOR_WHITE); // Make it print normally like the old CAT
+                VESA_print(buf, COLOR_WHITE); 
                 VESA_print("\n", COLOR_WHITE);
                 
                 kfree(buf);
-                kfree(file); 
             } else {
                 VESA_print("Error: File not found or is a directory.\n", COLOR_RED);
             }
+            if (file) kfree(file); // Prevent memory leak
         } else {
             VESA_print("Usage: CAT <file>\n", COLOR_WHITE);
         }
-    }    else if (kstrcmp(input, "PS") == 0) {
+    }
+   else if (kstrcasecmp(input, "LS") == 0) {
+        // 1. Parse the argument to see what we are trying to list
+        char* target = arg;
+        if (target && target[0] == '/') target++; // Ignore leading slash for checking
+        if (target && kstrlen(target) == 0) target = NULL;
+
+        // 2. Are we explicitly trying to list the virtual /dev folder?
+        int listing_dev = 0;
+        if (target && kstrcasecmp(target, "dev") == 0) {
+            listing_dev = 1; // User typed `ls dev` or `ls /dev`
+        } else if (!target && fs_current_dir != fs_root && kstrcasecmp(fs_current_dir->name, "dev") == 0) {
+            listing_dev = 1; // User is inside /dev and typed `ls`
+        }
+
+        // 3. Print the correct list
+        if (listing_dev) {
+            // --- VIRTUAL DIRECTORY ---
+            extern int devfs_count;
+            extern vfs_node_t devfs_nodes[];
+            for (int i = 0; i < devfs_count; i++) {
+                VESA_print("- ", 0xFFFFFF);
+                VESA_print(devfs_nodes[i].name, 0xFFFFFF);
+                VESA_print("\n", 0x555555); 
+            }
+        } else {
+            // --- PHYSICAL FAT DIRECTORY ---
+            // ONLY inject the fake 'dev' entry if we are listing the actual root directory
+            int listing_root = 0;
+            if (!target && fs_current_dir == fs_root) listing_root = 1;
+            if (arg && kstrcasecmp(arg, "/") == 0) listing_root = 1; // Handled `ls /`
+
+            if (listing_root) {
+                VESA_print("- ", 0x00FFFF); 
+                VESA_print("dev        ", 0x00FFFF); 
+                VESA_print(".         VIRTUAL\n", 0x555555);
+            }
+
+            if (arg && kstrlen(arg) > 0) {
+                // List the specific FAT folder the user asked for
+                uint32_t cluster = fat_get_cluster_from_path(arg); 
+                if (cluster != 0xFFFFFFFF) {
+                    fat_ls_cluster(cluster);
+                } else {
+                    VESA_print("Directory not found.\n", COLOR_RED);
+                }
+            } else {
+                // List the current FAT folder
+                fat_ls_cluster(fat_get_current_cluster());
+            }
+        }
+    } 
+  else if (kstrcasecmp(input, "CD") == 0) {
+        if (arg) {
+            char* target = arg;
+            if (target[0] == '/') target++; // Strip leading slash
+            if (kstrcasecmp(target, "") == 0) target = "/"; 
+
+            // Prevent FAT error if typing `cd ..` while already at Root
+            if (kstrcasecmp(target, "..") == 0 && kstrcmp(shell_cwd, "/") == 0) {
+                return; // Silently do nothing, we are already at root!
+            }
+
+            if (kstrcasecmp(target, "/") == 0 || kstrcasecmp(target, "..") == 0) {
+                // If we are exiting /dev, DO NOT tell FAT to move back, as FAT is already at root.
+                if (fs_current_dir != fs_root && kstrcasecmp(fs_current_dir->name, "dev") == 0 && kstrcasecmp(target, "..") == 0) {
+                    kfree(fs_current_dir);
+                    fs_current_dir = fs_root;
+                } else {
+                    if (fs_current_dir != fs_root) kfree(fs_current_dir);
+                    fs_current_dir = fs_root;
+                    fat_cd(target); 
+                }
+                update_shell_cwd(target);
+            } else {
+                vfs_node_t* next_dir = vfs_finddir(fs_current_dir, target);
+                
+                if (next_dir && (next_dir->flags & FS_DIRECTORY)) {
+                    if (fs_current_dir != fs_root) kfree(fs_current_dir);
+                    fs_current_dir = next_dir;
+                    
+                    if (kstrcasecmp(next_dir->name, "dev") != 0) {
+                        fat_cd(target); // Sync physical disk if NOT /dev
+                    }
+                    update_shell_cwd(target); // Update shell path string
+                    // SILENT SUCCESS! (No prints)
+                } else {
+                    VESA_print("CD: Directory not found.\n", COLOR_RED);
+                    if (next_dir) kfree(next_dir); 
+                }
+            }
+        } else {
+            VESA_print("Usage: CD <dirname>\n", COLOR_WHITE);
+        }
+    }
+  else if (kstrcasecmp(input, "PS") == 0) {
         VESA_print("TID    NAME          STATE\n", COLOR_CYAN);
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_list[i].state != 0) {
@@ -103,7 +213,7 @@ else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
             }
         }
     }
-    else if (kstrcmp(input, "UPTIME") == 0) {
+    else if (kstrcasecmp(input, "UPTIME") == 0) {
         char buf[32];
         uint32_t s = system_ticks / 1000; 
         VESA_print("Uptime: ", COLOR_WHITE);
@@ -111,7 +221,7 @@ else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
         VESA_print(buf, COLOR_CYAN);
         VESA_print("s\n", COLOR_WHITE);
     }
-    else if (kstrcmp(input, "STAT") == 0) {
+    else if (kstrcasecmp(input, "STAT") == 0) {
         VESA_print("--- KERNEL HEAP STATISTICS ---\n", COLOR_CYAN);
         extern header_t* heap_start; 
         #define HEAP_INITIAL_SIZE (64 * 1024 * 1024) 
@@ -162,79 +272,45 @@ else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
             }
         }
     }
-    else if (kstrcmp(input, "CLEAR") == 0) {
+    else if (kstrcasecmp(input, "CLEAR") == 0) {
         VESA_clear_buffer_only();
         task_list[current_task_idx].cursor_x = 0;
         task_list[current_task_idx].cursor_y = 0;
     }
-    else if (kstrcmp(input, "ECHO") == 0) {
+    else if (kstrcasecmp(input, "ECHO") == 0) {
         if (arg) { VESA_print(arg, COLOR_WHITE); VESA_print("\n", COLOR_WHITE); }
     }
-    else if (kstrcmp(input, "SLEEP") == 0) {
+    else if (kstrcasecmp(input, "SLEEP") == 0) {
         if (arg) { sleep(katoi(arg)); }
     }
 
-    // --- FILESYSTEM ---
-    else if (kstrcmp(input, "LS") == 0) {
-        if (arg && kstrlen(arg) > 0) {
-            uint32_t target = fat_get_cluster_from_path(arg);
-            if (target != 0xFFFFFFFF) fat_ls_cluster(target);
-            else VESA_print("Directory not found.\n", COLOR_RED);
-        } else {
-            fat_ls_cluster(fat_get_current_cluster());
-        }
-    }
-    else if (kstrcmp(input, "CD") == 0) {
-        if (arg) {
-            // 1. Ask the VFS to find the target directory (handles "TESTS", "..", etc.)
-            vfs_node_t* next_dir = vfs_finddir(fs_current_dir, arg);
-            
-            if (next_dir && (next_dir->flags & FS_DIRECTORY)) {
-                // 2. Free the old directory node to prevent memory leaks (unless it's the root!)
-                if (fs_current_dir != fs_root) kfree(fs_current_dir);
-                
-                // 3. Update the VFS Current Working Directory
-                fs_current_dir = next_dir;
-                
-                // 4. Keep the legacy FAT driver in sync for old commands like LS
-                fat_cd(arg); 
-            } else {
-                VESA_print("VFS CD: Directory not found.\n", COLOR_RED);
-                if (next_dir) kfree(next_dir); // Clean up if it was accidentally a file
-            }
-        } else {
-            VESA_print("Usage: CD <dirname>\n", COLOR_WHITE);
-        }
-    }
-    else if (kstrcmp(input, "MKDIR") == 0) {
+       
+    else if (kstrcasecmp(input, "MKDIR") == 0) {
         if (arg) fat_mkdir(arg);
         else VESA_print("Usage: MKDIR <name>\n", COLOR_WHITE);
     }
-    else if (kstrcmp(input, "RM") == 0) {
+    else if (kstrcasecmp(input, "RM") == 0) {
         if (arg) fat_rm(arg);
         else VESA_print("Usage: RM <filename>\n", COLOR_WHITE);
     }
-    else if (kstrcmp(input, "RMDIR") == 0) {
+    else if (kstrcasecmp(input, "RMDIR") == 0) {
         if (arg) fat_rmdir(arg);
         else VESA_print("Usage: RMDIR <dirname>\n", COLOR_WHITE);
     }
-    else if (kstrcmp(input, "PWD") == 0) {
-        if (fat_get_current_cluster() == 0) VESA_print("/\n", COLOR_WHITE);
-        else {
-            fat_print_path_recursive(fat_get_current_cluster());
-            VESA_print("\n", COLOR_WHITE);
-        }
+    else if (kstrcasecmp(input, "PWD") == 0) {
+        VESA_print(shell_cwd, COLOR_WHITE);
+        VESA_print("\n", COLOR_WHITE);
     }
-    else if (kstrcmp(input, "TOUCH") == 0) {
+    else if (kstrcasecmp(input, "TOUCH") == 0) {
         if (arg) fat_touch(arg);
         else VESA_print("Usage: TOUCH <filename>\n", COLOR_WHITE);
     }
     
-    else if (kstrcmp(input, "HEXDUMP") == 0) {
+    else if (kstrcasecmp(input, "HEXDUMP") == 0) {
         if (arg) fat_hexdump_file(arg);
         else VESA_print("Usage: HEXDUMP <filename>\n", COLOR_RED);
     }
-    else if (kstrcmp(input, "WRITE") == 0) {
+    else if (kstrcasecmp(input, "WRITE") == 0) {
         if (arg && kstrlen(arg) > 0) {
             char* filename = arg;
             char* content = NULL;
@@ -264,7 +340,7 @@ else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
         }
     }
     // --- NATIVE APPS & TASKS ---
-    else if (kstrcmp(input, "KED") == 0) {
+    else if (kstrcasecmp(input, "KED") == 0) {
         if (arg) {
             extern void KED_init(const char* filename); 
             extern void KED_task();                     
@@ -276,7 +352,7 @@ else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
             VESA_print("Usage: KED <filename>\n", COLOR_RED);
         }
     }
-    else if (kstrcmp(input, "TOP") == 0) {
+    else if (kstrcasecmp(input, "TOP") == 0) {
         extern void run_top();
         int tid = spawn_task(run_top, NULL, "TOP");
         task_create_window(tid, 0, 0, 0, 0);
@@ -295,7 +371,7 @@ else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
     }
 
     // --- EXECUTION ---
-    else if (kstrcmp(input, "RUN") == 0) {
+    else if (kstrcasecmp(input, "RUN") == 0) {
         if (arg) {
             struct fat_dir_entry* entry = fat_search(arg);
             if (entry) {
@@ -333,11 +409,11 @@ else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
             } else VESA_print("File not found.\n", COLOR_RED);
         }
     }
-    else if (kstrcmp(input, "COMPILE") == 0) {
+    else if (kstrcasecmp(input, "COMPILE") == 0) {
         if (arg) shell_compile(arg);
         else VESA_print("Usage: COMPILE <file.txt>\n", COLOR_RED);
     }
-    else if (kstrcmp(input, "KILL") == 0) {
+    else if (kstrcasecmp(input, "KILL") == 0) {
         if (arg) {
             int id = katoi(arg);
             if (id == 0) VESA_print("Cannot kill Shell.\n", COLOR_RED);
