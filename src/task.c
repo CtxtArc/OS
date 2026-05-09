@@ -12,6 +12,11 @@
 #define TEST_LABEL_X 100
 #define TEST_RESULT_X 450 
 
+char shell_history[10][128];
+int history_count = 0;
+int history_write_idx = 0;
+int history_view_idx = -1;
+
 uint32_t* desktop_bg_buffer = NULL; 
 int pending_shell_spawn = 1;
 extern uint32_t* VESA_get_back_buffer();

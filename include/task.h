@@ -11,10 +11,10 @@
 #define ERR_TASK_INVALID_EP   -3
 
 #define MAX_HISTORY 10
-static char shell_history[MAX_HISTORY][128];
-static int history_count = 0;
-static int history_write_idx = 0;
-static int history_view_idx = -1; // -1 means user is typing a new line
+extern  char shell_history[MAX_HISTORY][128];
+extern  int history_count;
+extern  int history_write_idx;
+extern  int history_view_idx; // -1 means user is typing a new line
 
 struct task {
     uint32_t esp;

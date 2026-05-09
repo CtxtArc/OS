@@ -2,7 +2,7 @@ CC = gcc
 AS = nasm
 # -Iinclude allows using #include "header.h" instead of paths
 CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -std=gnu99 -Iinclude
-LDFLAGS = -T linker.ld -m32 -nostdlib -ffreestanding -Wl,--build-id=none -no-pie
+LDFLAGS = -T linker.ld -m32 -nostdlib -ffreestanding -Wl,--build-id=none -Wl,-z,noexecstack -no-pie
 
 # Directories
 SRCDIR = src

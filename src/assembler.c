@@ -148,10 +148,10 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         uint32_t val = (val_s[0]=='0' && val_s[1]=='x') ? katoh(val_s) : (uint32_t)katoi((char*)val_s);
         if (out_buf) out_buf[*pos] = 0xA1; 
         (*pos)++;
-        if (out_buf) kmemcpy(&out_buf[*pos], &off, 4); *pos += 4;
+        if (out_buf) {kmemcpy(&out_buf[*pos], &off, 4);} *pos += 4;
         if (out_buf) out_buf[*pos] = 0x3D; 
         (*pos)++;
-        if (out_buf) kmemcpy(&out_buf[*pos], &val, 4); *pos += 4;
+        if (out_buf) {kmemcpy(&out_buf[*pos], &val, 4);} *pos += 4;
     }
     // FIX: ADDED 'N' FOR JNE (Jump Not Equal)
     else if (cmd[0] == 'J' && (cmd[1] == 'E' || cmd[1] == 'L' || cmd[1] == 'G' || cmd[1] == 'N')) {

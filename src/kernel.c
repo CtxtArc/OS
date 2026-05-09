@@ -18,6 +18,7 @@ extern void setup_virtual_devices();
 
 
 void kmain(uint32_t magic, struct multiboot_info* mbi) {
+    (void)magic;
     system_ticks = 0;
     if (!(mbi->flags & (1 << 12))) return; 
 

@@ -1,4 +1,5 @@
 #include "vesa.h"
+#include "task.h"
 #include <stdarg.h>
 #include "lib.h"
 #include <stddef.h>
