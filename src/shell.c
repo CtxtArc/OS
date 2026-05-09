@@ -9,6 +9,7 @@
 #include "fat.h"
 #include "KED.h"
 #include "assembler.h"
+#include "vfs.h"
 
 extern volatile struct task task_list[];
 extern int vesa_dirty;
@@ -55,7 +56,37 @@ void execute_command(char* input) {
         kprintf("Spawning SUICIDE task... watch the logs.\n");
         spawn_task(suicide_task,NULL, "suicide_app");
     }
-    else if (kstrcmp(input, "PS") == 0) {
+else if (kstrcmp(input, "CAT") == 0) { // <-- Renamed!
+        if (arg) {
+            vfs_node_t* file = NULL;
+            
+            if (kstrcmp(arg, "/dev/clock") == 0) {
+                file = (vfs_node_t*)kmalloc(sizeof(vfs_node_t));
+                kstrcpy(file->name, "/dev/clock");
+                file->flags = FS_FILE;
+                file->size = 64; 
+                file->read = dev_clock_read; 
+            } else {
+                file = vfs_finddir(fs_current_dir, arg);
+            }
+            
+            if (file && (file->flags & FS_FILE)) {
+                char* buf = kmalloc(file->size + 1);
+                uint32_t bytes_read = vfs_read(file, 0, file->size, (uint8_t*)buf);
+                buf[bytes_read] = '\0'; 
+                
+                VESA_print(buf, COLOR_WHITE); // Make it print normally like the old CAT
+                VESA_print("\n", COLOR_WHITE);
+                
+                kfree(buf);
+                kfree(file); 
+            } else {
+                VESA_print("Error: File not found or is a directory.\n", COLOR_RED);
+            }
+        } else {
+            VESA_print("Usage: CAT <file>\n", COLOR_WHITE);
+        }
+    }    else if (kstrcmp(input, "PS") == 0) {
         VESA_print("TID    NAME          STATE\n", COLOR_CYAN);
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_list[i].state != 0) {
@@ -154,8 +185,26 @@ void execute_command(char* input) {
         }
     }
     else if (kstrcmp(input, "CD") == 0) {
-        if (arg) fat_cd(arg);
-        else VESA_print("Usage: CD <dirname>\n", COLOR_WHITE);
+        if (arg) {
+            // 1. Ask the VFS to find the target directory (handles "TESTS", "..", etc.)
+            vfs_node_t* next_dir = vfs_finddir(fs_current_dir, arg);
+            
+            if (next_dir && (next_dir->flags & FS_DIRECTORY)) {
+                // 2. Free the old directory node to prevent memory leaks (unless it's the root!)
+                if (fs_current_dir != fs_root) kfree(fs_current_dir);
+                
+                // 3. Update the VFS Current Working Directory
+                fs_current_dir = next_dir;
+                
+                // 4. Keep the legacy FAT driver in sync for old commands like LS
+                fat_cd(arg); 
+            } else {
+                VESA_print("VFS CD: Directory not found.\n", COLOR_RED);
+                if (next_dir) kfree(next_dir); // Clean up if it was accidentally a file
+            }
+        } else {
+            VESA_print("Usage: CD <dirname>\n", COLOR_WHITE);
+        }
     }
     else if (kstrcmp(input, "MKDIR") == 0) {
         if (arg) fat_mkdir(arg);
@@ -180,28 +229,7 @@ void execute_command(char* input) {
         if (arg) fat_touch(arg);
         else VESA_print("Usage: TOUCH <filename>\n", COLOR_WHITE);
     }
-    else if (kstrcmp(input, "CAT") == 0) {
-        if (arg) {
-            struct fat_dir_entry* file = fat_search(arg);
-            if (file && !(file->attr & 0x10)) {
-                char* buffer = (char*)fat_load_file(file);
-                if (buffer) {
-                    char temp[2] = {0, 0};
-                    for (uint32_t i = 0; i < file->size; i++) {
-                        char c = buffer[i];
-                        if (c == '\n') VESA_print("\n", COLOR_WHITE);
-                        else if (c >= 32 && c <= 126) { temp[0] = c; VESA_print(temp, COLOR_WHITE); }
-                        else if (c == '\t') VESA_print("    ", COLOR_WHITE);
-                        else VESA_print(".", 0x555555);
-                    }
-                    VESA_print("\n", COLOR_WHITE);
-                    kfree(buffer);
-                }
-            } else VESA_print("File not found.\n", COLOR_RED);
-            
-            kfree(file); // FIX: Free the fat_search entry
-        }
-    }
+    
     else if (kstrcmp(input, "HEXDUMP") == 0) {
         if (arg) fat_hexdump_file(arg);
         else VESA_print("Usage: HEXDUMP <filename>\n", COLOR_RED);
@@ -210,6 +238,8 @@ void execute_command(char* input) {
         if (arg && kstrlen(arg) > 0) {
             char* filename = arg;
             char* content = NULL;
+            
+            // 1. Parse the filename and the content
             for (int i = 0; arg[i] != '\0'; i++) {
                 if (arg[i] == ' ') {
                     arg[i] = '\0';
@@ -217,11 +247,22 @@ void execute_command(char* input) {
                     break;
                 }
             }
-            if (filename && content) fat_write_file(filename, content);
-            else VESA_print("Usage: WRITE <file> <text>\n", COLOR_RED);
+            
+            if (filename && content) {
+                // 2. NEW: Check if the file exists. If not, create it!
+                struct fat_dir_entry* file = fat_search(filename);
+                if (!file) {
+                    fat_touch(filename);
+                }
+                
+                // 3. Write the data
+                fat_write_file(filename, content);
+            }
+            else {
+                VESA_print("Usage: WRITE <file> <text>\n", COLOR_RED);
+            }
         }
     }
-
     // --- NATIVE APPS & TASKS ---
     else if (kstrcmp(input, "KED") == 0) {
         if (arg) {

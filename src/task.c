@@ -7,6 +7,7 @@
 #include "lib.h"
 #include "fat.h"
 #include "bmp.h"
+#include "vfs.h"
 
 uint32_t* desktop_bg_buffer = NULL; 
 int pending_shell_spawn = 0;
@@ -369,7 +370,7 @@ void run_startup_tests() {
 
     int cur_y = 150;
     VESA_print_at("===================================================", TEST_LABEL_X, cur_y, color_title); cur_y += 20;
-    VESA_print_at("           KDXOS SYSTEM DIAGNOSTICS                ", TEST_LABEL_X, cur_y, color_title); cur_y += 20;
+    VESA_print_at("            KDXOS SYSTEM DIAGNOSTICS                ", TEST_LABEL_X, cur_y, color_title); cur_y += 20;
     VESA_print_at("===================================================", TEST_LABEL_X, cur_y, color_title); cur_y += 40;
     
     struct multiboot_info* mbi = VESA_get_boot_info();
@@ -400,7 +401,40 @@ void run_startup_tests() {
     } else {
         VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
     }
+    cur_y += 25;
+
+   // --- NEW: VFS DIAGNOSTIC TEST ---
+    VESA_print_at("[TEST] Virtual File System:", TEST_LABEL_X, cur_y, color_text);
+    if (fs_root != NULL) {
+        // 1. Find the node via VFS
+        vfs_node_t* test_node = vfs_finddir(fs_root, "BG.BMP");
+        
+        // 2. Ensure it was found AND that the generic 'read' pointer is attached
+        if (test_node && test_node->read != 0) {
+            
+            // 3. Use the generic VFS interface to read the first 2 bytes
+            uint8_t magic[3];
+            vfs_read(test_node, 0, 2, magic);
+            magic[2] = '\0'; // Null terminate so we can check it safely
+            
+            // 4. A valid BMP file ALWAYS starts with the ASCII characters "BM"
+            if (magic[0] == 'B' && magic[1] == 'M') {
+                VESA_print_at("[ PASS ]", TEST_RESULT_X, cur_y, color_pass);
+            } else {
+                VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
+            }
+            kfree(test_node); // Memory safety
+        } else {
+            VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
+            if (test_node) kfree(test_node);
+        }
+    } else {
+        // fs_root is null, meaning fat_vfs_mount() was never called
+        VESA_print_at("[ FAIL ]", TEST_RESULT_X, cur_y, color_fail);
+    }
     cur_y += 50;
+    // --------------------------------
+    // --------------------------------
 
     VESA_print_at("DIAGNOSTICS COMPLETE.", TEST_LABEL_X, cur_y, color_info); cur_y += 25;
     VESA_print_at("PRESS ANY KEY TO BOOT KDXOS...", TEST_LABEL_X, cur_y, color_title);
@@ -412,7 +446,6 @@ void run_startup_tests() {
     while(!has_key_in_buffer()) { yield(); }
     get_key_from_buffer(); 
 }
-
 void init_multitasking() {
     __asm__ volatile("cli"); 
 

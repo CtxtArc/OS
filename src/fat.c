@@ -4,6 +4,7 @@
 #include "io.h"
 #include "lib.h"
 #include "vesa.h"
+#include "vfs.h" 
 
 static struct fat_bpb bpb;
 static uint32_t root_dir_sectors;
@@ -139,15 +140,7 @@ tail->size = (16 * 1024 * 1024) - ((uint32_t)tail - 0x800000) - sizeof(header_t)
 tail->is_free = 1;
 tail->next = NULL;
 
-/*fat_touch("SPINNER.BIN");
-    fat_write_file_raw("SPINNER.BIN", (const uint8_t*)spinner_code, sizeof(spinner_code));
-    //kprintf_color(0x00FF00, "SPINNER.BIN created successfully!\n");
-    
-    fat_touch("CLOCK.BIN");
-    fat_write_file_raw("CLOCK.BIN", (const uint8_t*)clock_code, sizeof(clock_code));
-    //kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
-    //test_multi_sector_write();
-*/
+
 }
 
 // Helper to convert Cluster to LBA
@@ -243,76 +236,6 @@ void fat_cd(const char* path) {
     }
 }
 
-/*void fat_ls() {
-    uint8_t buffer[512];
-    uint32_t dir_lba = get_current_dir_lba();
-    ide_read_sector(dir_lba, buffer);
-
-    struct fat_dir_entry* entry = (struct fat_dir_entry*)buffer;
-    kprintf_unsync("Directory Listing:\n");
-
-    for (int i = 0; i < 16; i++) {
-        if (entry[i].name[0] == 0x00) break;
-        if ((unsigned char)entry[i].name[0] == 0xE5) continue;
-        if (entry[i].attr == 0x0F) continue; // Skip LFN junk
-
-        if (entry[i].attr & 0x10) kprintf_unsync("[DIR] ");
-        else kprintf_unsync("      ");
-
-        // --- PRINT NAME ---
-        for (int n = 0; n < 8; n++) {
-            if (entry[i].name[n] != ' ') kputc(entry[i].name[n]);
-        }
-
-        // --- SMART CONDITIONAL DOT ---
-        // 1. Don't print a dot if it's the "." or ".." directory entries
-        // 2. Only print a dot if the extension has actual characters (not spaces)
-        int is_dot_entry = (entry[i].name[0] == '.');
-        
-        if (!is_dot_entry) {
-            if (entry[i].ext[0] != ' ' || entry[i].ext[1] != ' ' || entry[i].ext[2] != ' ') {
-                kputc('.');
-                for (int e = 0; e < 3; e++) {
-                    if (entry[i].ext[e] != ' ') kputc(entry[i].ext[e]);
-                }
-            }
-        }
-
-        kprintf_unsync("  %d bytes\n", entry[i].size);
-    }
-    VESA_flip();
-}
-void fat_ls_cluster(uint32_t cluster) {
-    uint8_t buffer[512];
-    uint32_t dir_lba;
-
-    // Determine LBA based on the cluster passed in
-    if (cluster == 0) {
-        dir_lba = first_fat_sector + (bpb.num_fats * bpb.fat_size_16);
-    } else {
-        dir_lba = cluster_to_lba(cluster);
-    }
-
-    ide_read_sector(dir_lba, buffer);
-    struct fat_dir_entry* entry = (struct fat_dir_entry*)buffer;
-    
-    kprintf_unsync("Directory Listing:\n");
-
-    for (int i = 0; i < 16; i++) {
-        if (entry[i].name[0] == 0x00) break;
-        if ((unsigned char)entry[i].name[0] == 0xE5) continue;
-        if (entry[i].attr == 0x0F) continue;
-
-        if (entry[i].attr & 0x10) kprintf_unsync("[DIR] ");
-        else kprintf_unsync("      ");
-
-        // Use your existing name printing logic here
-        fat_print_name_ext(entry[i].name, entry[i].ext);
-        
-        kprintf_unsync("  %d bytes\n", entry[i].size);
-    }
-    VESA_flip();
-}*/
 
 void fat_ls() {
     uint8_t buffer[512];
@@ -972,62 +895,7 @@ uint16_t fat_get_next_cluster(uint16_t cluster) {
     ide_read_sector(lba, fat_sector_buffer);
     return *(uint16_t*)&fat_sector_buffer[entry_offset];
 }
-/*
-void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size) {
-    if (!filename || !data || size == 0) return;
 
-    // 1. Find the Directory Entry
-    uint32_t dir_lba = get_current_dir_lba();
-    ide_read_sector(dir_lba, raw_io_buffer);
-    
-    struct fat_dir_entry* entries = (struct fat_dir_entry*)raw_io_buffer;
-    int slot = -1;
-
-    for (int i = 0; i < 16; i++) {
-        if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
-            slot = i;
-            break;
-        }
-    }
-
-    if (slot == -1) {
-        kprintf_color(0xFF0000, "RAW Error: File %s not found.\n", filename);
-        return;
-    }
-
-    // 2. Handle Cluster Allocation
-    uint16_t cluster = entries[slot].first_cluster_low;
-    if (cluster == 0) {
-        cluster = fat_find_free_cluster();
-        if (cluster == 0xFFFF) {
-            kprintf_color(0xFF0000, "Disk Full\n");
-            return;
-        }
-        fat_update_table(cluster, 0xFFFF);
-        entries[slot].first_cluster_low = cluster;
-    }
-
-    // 3. Update Directory Entry SIZE and Cluster
-    entries[slot].size = size;
-    
-    // Save Directory back to disk immediately
-    ide_write_sector(dir_lba, raw_io_buffer);
-
-    // 4. Prepare Data Buffer
-    // We clear the buffer and then copy the binary data
-    kmemset(raw_io_buffer, 0, 512 / 4);
-    
-    // Safety check: Binary files must be <= 512 bytes for this single-sector version
-    uint32_t bytes_to_copy = (size > 512) ? 512 : size;
-    kmemcpy(raw_io_buffer, data, bytes_to_copy);
-
-    // 5. Write Data to Cluster
-    uint32_t data_lba = cluster_to_lba(cluster);
-    ide_write_sector(data_lba, raw_io_buffer);
-
-    kprintf_color(0x00FF00, "Successfully wrote RAW %d bytes to %s\n", bytes_to_copy, filename);
-}
-*/
 void fat_write_file_raw(const char* filename, const unsigned char* data, size_t total_size) {
     if (!filename || !data || total_size == 0) return;
 
@@ -1256,4 +1124,87 @@ void fat_append_file(const char* filename, const char* data) {
         }
     }
     kfree(dir_buf);
+}
+
+
+// The VFS Write Wrapper
+uint32_t fat_vfs_write(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
+    // For now, we will treat VFS writes as complete file overwrites using your raw writer
+    fat_write_file_raw(node->name, buffer, size);
+    
+    // Update the VFS node's size in memory so the OS knows it got bigger
+    node->size = size; 
+    
+    return size; // Return the number of bytes written
+}
+
+// 1. The VFS Read Wrapper
+uint32_t fat_vfs_read(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
+    // We synthesize a fake directory entry so we can reuse your awesome fat_load_file!
+    struct fat_dir_entry fake_entry;
+    fake_entry.first_cluster_low = (uint16_t)(uint32_t)node->device_specific_data;
+    fake_entry.size = node->size;
+
+    void* raw_file = fat_load_file(&fake_entry);
+    if (!raw_file) return 0; // Read failed
+
+    // Safety checks
+    if (offset >= node->size) {
+        kfree(raw_file);
+        return 0;
+    }
+
+    uint32_t real_size = size;
+    if (offset + size > node->size) {
+        real_size = node->size - offset; // Prevent reading out of bounds
+    }
+
+    // Copy the specific requested chunk into the VFS buffer
+    kmemcpy(buffer, (uint8_t*)raw_file + offset, real_size);
+    kfree(raw_file);
+
+    return real_size;
+}
+
+// 2. The VFS Find Directory Wrapper
+vfs_node_t* fat_vfs_finddir(vfs_node_t* node, char* name) {
+    uint32_t search_cluster = (uint32_t)node->device_specific_data;
+    struct fat_dir_entry* entry = fat_search_in(name, search_cluster);
+
+    if (!entry) return NULL; // Not found
+
+    // Allocate a new VFS node for the caller
+    vfs_node_t* out = (vfs_node_t*)kmalloc(sizeof(vfs_node_t));
+    kstrcpy(out->name, name);
+    out->size = entry->size;
+    
+    if (entry->attr & 0x10) {
+        out->flags = FS_DIRECTORY;
+        out->read = 0; // Directories use finddir, not read
+    } else {
+        out->flags = FS_FILE;
+        out->read = fat_vfs_read; // Attach our FAT reader!
+        out->write = fat_vfs_write; // NEW: Attach the write wrapper!
+    }
+    
+    out->write = 0; // We will add the write wrapper later
+    out->finddir = fat_vfs_finddir; // Recursion! Attach the finder!
+    
+    // Store the FAT cluster secretly inside the VFS node
+    out->device_specific_data = (void*)(uint32_t)entry->first_cluster_low;
+
+    return out;
+}
+
+// 3. The Initial Mount Function
+void fat_vfs_mount() {
+    fs_root = (vfs_node_t*)kmalloc(sizeof(vfs_node_t));
+    kstrcpy(fs_root->name, "/");
+    fs_root->flags = FS_DIRECTORY | FS_MOUNTPOINT;
+    fs_root->size = 0;
+    fs_root->read = 0;
+    fs_root->write = 0;
+    fs_root->finddir = fat_vfs_finddir; // Attach the finder!
+    fs_root->device_specific_data = (void*)0; // Cluster 0 = Root dir
+    fs_current_dir = fs_root; // NEW: Start in the root directory
 }

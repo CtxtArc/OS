@@ -13,6 +13,7 @@
 // External references for memory and info
 extern char end;
 extern int system_ticks;
+extern void fat_vfs_mount();
 
 void kmain(uint32_t magic, struct multiboot_info* mbi) {
     system_ticks = 0;
@@ -35,7 +36,8 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
     timer_init(1000);  
 
     // 4. Filesystem & Tasks
-    fat_init();
+    fat_init();      // Sets up the hard drive variables
+    fat_vfs_mount(); // Mounts the hard drive to the VFS '/' root!
     run_startup_tests();
     init_multitasking(); 
 

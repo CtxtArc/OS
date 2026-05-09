@@ -1,6 +1,8 @@
 #ifndef FAT_H
 #define FAT_H
 #include <stdint.h>
+#include "vfs.h"
+
 #define IDE_PRIMARY_DATA       0x1F0
 #define IDE_PRIMARY_ERR        0x1F1
 #define IDE_PRIMARY_SECCOUNT   0x1F2
@@ -82,5 +84,6 @@ uint32_t fat_get_cluster_from_path(const char* path);
 void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size);
 void test_multi_sector_write();
 
+uint32_t fat_vfs_write(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buffer);
 void fat_append_file(const char* filename, const char* data);
 #endif // !FAT_H
