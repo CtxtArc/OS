@@ -373,6 +373,11 @@ void syscall_handler(struct registers *regs) {
         if (ms > 0 && ticks_to_sleep == 0) ticks_to_sleep = 1;
         task_list[id].sleep_ticks = ticks_to_sleep;
         task_list[id].state = 2; // SLEEPING
+        
+        // ADD THIS: Trap the CPU here until the timer handler wakes this task up
+        while (task_list[id].state == 2) {
+            __asm__ volatile("hlt");
+        }
     }
     else if (regs->eax == 4) { // EXIT
         int id = current_task_idx;
