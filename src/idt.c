@@ -6,6 +6,7 @@
 #include "kheap.h"
 #include "assembler.h"
 #include "wm.h"
+#include "fat.h"
 
 
 uint32_t timer_frequency = 0;
@@ -474,10 +475,8 @@ void syscall_handler(struct registers *regs) {
         
         mark_task_dirty(id, 0, 0, sw, mbi->framebuffer_height);
     }
-    else if (regs->eax == 9) { // PRINT_NUM (Variable)
-        uint32_t offset = regs->ebx;
-        uint32_t* var_ptr = (uint32_t*)offset; 
-        uint32_t actual_val = *var_ptr;
+    else if (regs->eax == 9) { // PRINT_NUM (Value is now directly in EBX)
+        uint32_t actual_val = regs->ebx; // Use the value directly!
 
         char buf[16];
         itoa(actual_val, buf, 10);
@@ -507,8 +506,7 @@ void syscall_handler(struct registers *regs) {
             }
             mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
         }
-    }
-    
+    }    
     // --- THE SYSCALL 10 FIX ---
     else if (regs->eax == 10) { 
         volatile struct task* t = &task_list[id];
@@ -522,5 +520,28 @@ void syscall_handler(struct registers *regs) {
             regs->eax = 0; // Return 0 if no key is pressed
         }
         return;
+    }
+else if (regs->eax == 11) { // LOAD_FILE
+        // EBX holds the string offset. We align it just like PRINT_STR.
+        uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
+        char* filename = (char*)(regs->ebx + aligned_code);
+
+        struct fat_dir_entry* entry = fat_search(filename);
+        if (entry) {
+            void* file_data = fat_load_file(entry);
+            regs->eax = (uint32_t)file_data; // Return Memory Pointer
+            regs->ecx = entry->size;         // Return File Size
+            kfree(entry);                    // Prevent memory leak!
+        } else {
+            regs->eax = 0; // 0 means file not found
+            regs->ecx = 0;
+        }
+    }
+    else if (regs->eax == 12) { // FREE_MEM
+        // EBX holds the pointer we want to free
+        void* ptr = (void*)regs->ebx;
+        if (ptr != NULL && ptr != 0) {
+            kfree(ptr);
+        }
     }
 }

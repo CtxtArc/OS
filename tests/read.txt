@@ -1,0 +1,53 @@
+WINDOW 0 0 500 400
+SET index 0
+SET draw_x 10
+SET draw_y 10
+
+LOADFILE "LOREM.TXT" file_ptr file_size
+
+CMP file_size 0
+JE file_error
+
+LABEL read_loop
+    # Safety: Exit if we hit the end
+    CMP index file_size
+    JE cleanup
+
+    # Read the byte
+    READBYTE file_ptr index char_val
+    
+    # NEW: Skip non-printable characters (like nulls)
+    CMP char_val 0
+    JE skip_char
+
+    # Draw the character at current X/Y
+    # Note: We use Syscall 1 (PRINT_CHAR) via a temporary register trick
+    # If your assembler doesn't have PRINT_CHAR yet, use this:
+    PRINT_NUM char_val draw_x draw_y 0x00FF00
+
+    # Advance cursor
+    ADD draw_x 8
+    CMP draw_x 480
+    JL next_char
+    SET draw_x 10
+    ADD draw_y 12
+
+LABEL next_char
+    ADD index 1
+    # Lower the sleep to 10ms so it doesn't take 20 seconds to finish!
+    SLEEP 10
+    GOTO read_loop
+
+LABEL skip_char
+    ADD index 1
+    GOTO read_loop
+
+LABEL cleanup
+    FREE file_ptr
+    SLEEP 5000 # Wait 5 seconds at the end so I can read it!
+    EXIT
+
+LABEL file_error
+    PRINT "ERROR: File empty" 10 10 0xFF0000
+    SLEEP 3000
+    EXIT

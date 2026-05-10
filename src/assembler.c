@@ -128,30 +128,42 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
             char var[32], t1[32], t2[32], t3[32];
             ptr = get_token(ptr, var); ptr = get_token(ptr, t1);
             ptr = get_token(ptr, t2); ptr = get_token(ptr, t3);
-            emit_load(0xB8, "9", out_buf, pos);
+            
+            emit_load(0xB8, "9", out_buf, pos); // EAX = 9
+            
+            // NEW: Load the VALUE of the variable into EBX
             uint32_t off = get_var_offset(var);
-            if (out_buf) { out_buf[*pos] = 0x8B; out_buf[*pos+1] = 0x1D; }
-            *pos += 2;
-            if (out_buf) { kmemcpy(&out_buf[*pos], &off, 4); }
-            *pos += 4;
-            emit_load(0xB9, t1, out_buf, pos);
-            emit_load(0xBA, t2, out_buf, pos);
-            emit_load(0xBF, t3, out_buf, pos);
+            if (out_buf) { out_buf[*pos] = 0x8B; out_buf[*pos+1] = 0x1D; kmemcpy(&out_buf[*pos+2], &off, 4); }
+            *pos += 6;
+
+            emit_load(0xB9, t1, out_buf, pos); // ECX = X
+            emit_load(0xBA, t2, out_buf, pos); // EDX = Y
+            emit_load(0xBF, t3, out_buf, pos); // EDI = Color
+            
             if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; }
             *pos += 2;
-        }
-    }
+        }    }
     else if (kstrcmp(cmd, "CMP") == 0) {
         char var[32], val_s[32];
         ptr = get_token(ptr, var); ptr = get_token(ptr, val_s);
         uint32_t off = get_var_offset(var);
-        uint32_t val = (val_s[0]=='0' && val_s[1]=='x') ? katoh(val_s) : (uint32_t)katoi((char*)val_s);
-        if (out_buf) out_buf[*pos] = 0xA1; 
-        (*pos)++;
-        if (out_buf) {kmemcpy(&out_buf[*pos], &off, 4);} *pos += 4;
-        if (out_buf) out_buf[*pos] = 0x3D; 
-        (*pos)++;
-        if (out_buf) {kmemcpy(&out_buf[*pos], &val, 4);} *pos += 4;
+        
+        // 1. Load the first variable into EAX
+        if (out_buf) { out_buf[*pos] = 0xA1; kmemcpy(&out_buf[*pos+1], &off, 4); } 
+        *pos += 5;
+        
+        // 2. Check if the second argument is a number or a variable
+        if ((val_s[0] >= '0' && val_s[0] <= '9') || val_s[0] == '-') {
+            // Compare EAX to Immediate Number
+            uint32_t val = (val_s[0]=='0' && val_s[1]=='x') ? katoh(val_s) : (uint32_t)katoi((char*)val_s);
+            if (out_buf) { out_buf[*pos] = 0x3D; kmemcpy(&out_buf[*pos+1], &val, 4); } 
+            *pos += 5;
+        } else {
+            // Compare EAX to Second Variable's Memory Value
+            uint32_t off2 = get_var_offset(val_s);
+            if (out_buf) { out_buf[*pos] = 0x3B; out_buf[*pos+1] = 0x05; kmemcpy(&out_buf[*pos+2], &off2, 4); } 
+            *pos += 6;
+        }
     }
     // FIX: ADDED 'N' FOR JNE (Jump Not Equal)
     else if (cmd[0] == 'J' && (cmd[1] == 'E' || cmd[1] == 'L' || cmd[1] == 'G' || cmd[1] == 'N')) {
@@ -256,5 +268,78 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         emit_load(0xBF, t5, out_buf, pos);
         if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; }
         *pos += 2;
+    }
+// --- NEW: LOADFILE "filename.ext" ptr_var size_var ---
+    else if (kstrcmp(cmd, "LOADFILE") == 0) {
+        const char* p = ptr;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\"') {
+            char str_val[128]; p++; uint32_t s_len = 0;
+            while (*p != '\"' && *p != '\0') str_val[s_len++] = *p++;
+            str_val[s_len++] = '\0'; if (*p == '\"') p++;
+            
+            char var_ptr[32], var_size[32];
+            p = get_token(p, var_ptr); p = get_token(p, var_size);
+            
+            // 1. Write the string into the binary
+            if (out_buf) { out_buf[*pos] = 0xEB; out_buf[*pos+1] = (uint8_t)s_len; }
+            *pos += 2;
+            uint32_t str_off = *pos;
+            if (out_buf) { for(uint32_t j=0; j<s_len; j++) out_buf[*pos + j] = (uint8_t)str_val[j]; }
+            *pos += s_len;
+            
+            // 2. Call Syscall 11
+            emit_load(0xB8, "11", out_buf, pos); // EAX = 11
+            emit_mov(0xBB, str_off, out_buf, pos); // EBX = string offset
+            if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; } // INT 0x80
+            *pos += 2;
+            
+            // 3. Save EAX (Memory Pointer) into var_ptr
+            uint32_t off_ptr = get_var_offset(var_ptr);
+            if (out_buf) { out_buf[*pos] = 0xA3; } // MOV [addr], EAX
+            (*pos)++;
+            if (out_buf) { kmemcpy(&out_buf[*pos], &off_ptr, 4); }
+            *pos += 4;
+            
+            // 4. Save ECX (File Size) into var_size
+            uint32_t off_size = get_var_offset(var_size);
+            if (out_buf) { out_buf[*pos] = 0x89; out_buf[*pos+1] = 0x0D; } // MOV [addr], ECX
+            *pos += 2;
+            if (out_buf) { kmemcpy(&out_buf[*pos], &off_size, 4); }
+            *pos += 4;
+        }
+    }
+    // --- NEW: READBYTE ptr_var index_var out_var ---
+    // Reads a single byte from (ptr_var + index_var) into out_var
+    else if (kstrcmp(cmd, "READBYTE") == 0) {
+        char v_ptr[32], v_idx[32], v_out[32];
+        ptr = get_token(ptr, v_ptr); ptr = get_token(ptr, v_idx); ptr = get_token(ptr, v_out);
+        uint32_t off_ptr = get_var_offset(v_ptr);
+        uint32_t off_idx = get_var_offset(v_idx);
+        uint32_t off_out = get_var_offset(v_out);
+
+        // mov eax, [v_ptr]
+        if (out_buf) { out_buf[*pos] = 0xA1; kmemcpy(&out_buf[*pos+1], &off_ptr, 4); } *pos += 5;
+        // mov ecx, [v_idx]
+        if (out_buf) { out_buf[*pos] = 0x8B; out_buf[*pos+1] = 0x0D; kmemcpy(&out_buf[*pos+2], &off_idx, 4); } *pos += 6;
+        // add eax, ecx
+        if (out_buf) { out_buf[*pos] = 0x01; out_buf[*pos+1] = 0xC8; } *pos += 2;
+        // xor ebx, ebx (Clear EBX so we don't have garbage data)
+        if (out_buf) { out_buf[*pos] = 0x31; out_buf[*pos+1] = 0xDB; } *pos += 2;
+        // mov bl, byte [eax]
+        if (out_buf) { out_buf[*pos] = 0x8A; out_buf[*pos+1] = 0x18; } *pos += 2;
+        // mov [v_out], ebx
+        if (out_buf) { out_buf[*pos] = 0x89; out_buf[*pos+1] = 0x1D; kmemcpy(&out_buf[*pos+2], &off_out, 4); } *pos += 6;
+    }
+    // --- NEW: FREE ptr_var ---
+    else if (kstrcmp(cmd, "FREE") == 0) {
+        char v_ptr[32]; get_token(ptr, v_ptr);
+        uint32_t off_ptr = get_var_offset(v_ptr);
+        
+        // mov ebx, [v_ptr]
+        if (out_buf) { out_buf[*pos] = 0x8B; out_buf[*pos+1] = 0x1D; kmemcpy(&out_buf[*pos+2], &off_ptr, 4); } *pos += 6;
+        // mov eax, 12 ; int 0x80
+        if (out_buf) { out_buf[*pos] = 0xB8; out_buf[*pos+1] = 0x0C; out_buf[*pos+2] = 0x00; out_buf[*pos+3] = 0x00; out_buf[*pos+4] = 0x00; } *pos += 5;
+        if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; } *pos += 2;
     }
 }
