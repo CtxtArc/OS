@@ -20,10 +20,7 @@ LABEL read_loop
     CMP char_val 0
     JE skip_char
 
-    # Draw the character at current X/Y
-    # Note: We use Syscall 1 (PRINT_CHAR) via a temporary register trick
-    # If your assembler doesn't have PRINT_CHAR yet, use this:
-    PRINT_NUM char_val draw_x draw_y 0x00FF00
+    PRINT_CHAR char_val draw_x draw_y 0x00FF00
 
     # Advance cursor
     ADD draw_x 8
@@ -35,7 +32,7 @@ LABEL read_loop
 LABEL next_char
     ADD index 1
     # Lower the sleep to 10ms so it doesn't take 20 seconds to finish!
-    SLEEP 10
+    #SLEEP 10
     GOTO read_loop
 
 LABEL skip_char

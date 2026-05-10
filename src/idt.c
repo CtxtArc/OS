@@ -522,26 +522,56 @@ void syscall_handler(struct registers *regs) {
         return;
     }
 else if (regs->eax == 11) { // LOAD_FILE
-        // EBX holds the string offset. We align it just like PRINT_STR.
-        uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
-        char* filename = (char*)(regs->ebx + aligned_code);
+    uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
+    char* filename = (char*)(regs->ebx + aligned_code);
 
-        struct fat_dir_entry* entry = fat_search(filename);
-        if (entry) {
-            void* file_data = fat_load_file(entry);
-            regs->eax = (uint32_t)file_data; // Return Memory Pointer
-            regs->ecx = entry->size;         // Return File Size
-            kfree(entry);                    // Prevent memory leak!
+    struct fat_dir_entry* entry = fat_search(filename);
+    if (entry) {
+        uint32_t file_size = entry->size;  // 1. Save size FIRST
+        void* file_data = fat_load_file(entry); // 2. Load file
+        kfree(entry);                      // 3. Free entry last
+
+        if (file_data) {
+            regs->eax = (uint32_t)file_data;
+            regs->ecx = file_size;         // 4. Use saved size, not entry->size
         } else {
-            regs->eax = 0; // 0 means file not found
+            // fat_load_file returned NULL (OOM or read error)
+            regs->eax = 0;
             regs->ecx = 0;
         }
+    } else {
+        regs->eax = 0;
+        regs->ecx = 0;
     }
-    else if (regs->eax == 12) { // FREE_MEM
+}    else if (regs->eax == 12) { // FREE_MEM
         // EBX holds the pointer we want to free
         void* ptr = (void*)regs->ebx;
         if (ptr != NULL && ptr != 0) {
             kfree(ptr);
         }
     }
+else if (regs->eax == 13) { // DRAW_CHAR_COLORED
+    char c = (char)(regs->ebx & 0xFF);
+    int x = regs->ecx + border;
+    int y = regs->edx + border;
+    uint32_t color = regs->edi;
+
+    if (c < 32 || c > 126) { return; } // skip non-printable
+
+    if (task_list[id].has_window && task_list[id].window_buffer) {
+        extern uint8_t font8x8_basic[128][8];
+        uint8_t* glyph = font8x8_basic[(unsigned char)c];
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 8; col++) {
+                if (glyph[row] & (1 << (7 - col))) {
+                    int dx = x + col, dy = y + row;
+                    if (dx >= 0 && dx < task_list[id].win_w &&
+                        dy >= 0 && dy < task_list[id].win_h)
+                        task_list[id].window_buffer[(dy * sw) + dx] = color;
+                }
+            }
+        }
+        mark_task_dirty(id, x, y, 8, 8);
+    }
+}
 }

@@ -342,4 +342,34 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos, int pass) 
         if (out_buf) { out_buf[*pos] = 0xB8; out_buf[*pos+1] = 0x0C; out_buf[*pos+2] = 0x00; out_buf[*pos+3] = 0x00; out_buf[*pos+4] = 0x00; } *pos += 5;
         if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; } *pos += 2;
     }
+else if (kstrcmp(cmd, "PRINT_CHAR") == 0) {
+    // PRINT_CHAR char_var x_var y_var color
+    char v_c[32], v_x[32], v_y[32], v_col[32];
+    ptr = get_token(ptr, v_c);
+    ptr = get_token(ptr, v_x);
+    ptr = get_token(ptr, v_y);
+    ptr = get_token(ptr, v_col);
+
+    uint32_t off_c   = get_var_offset(v_c);
+    uint32_t off_x   = get_var_offset(v_x);
+    uint32_t off_y   = get_var_offset(v_y);
+
+    // mov ebx, [char_var]  — the actual byte value
+    if (out_buf) { out_buf[*pos]=0x8B; out_buf[*pos+1]=0x1D;
+                   kmemcpy(&out_buf[*pos+2], &off_c, 4); } *pos += 6;
+    // mov ecx, [x_var]
+    if (out_buf) { out_buf[*pos]=0x8B; out_buf[*pos+1]=0x0D;
+                   kmemcpy(&out_buf[*pos+2], &off_x, 4); } *pos += 6;
+    // mov edx, [y_var]
+    if (out_buf) { out_buf[*pos]=0x8B; out_buf[*pos+1]=0x15;
+                   kmemcpy(&out_buf[*pos+2], &off_y, 4); } *pos += 6;
+    // mov edi, <color literal>  — parse v_col as hex/dec
+    uint32_t col_val = parse_literal(v_col);
+    if (out_buf) { out_buf[*pos]=0xBF; kmemcpy(&out_buf[*pos+1], &col_val, 4); } *pos += 5;
+    // mov eax, 13
+    if (out_buf) { out_buf[*pos]=0xB8; out_buf[*pos+1]=0x0D;
+                   out_buf[*pos+2]=0; out_buf[*pos+3]=0; out_buf[*pos+4]=0; } *pos += 5;
+    // int 0x80
+    if (out_buf) { out_buf[*pos]=0xCD; out_buf[*pos+1]=0x80; } *pos += 2;
+}
 }

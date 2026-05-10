@@ -19,6 +19,7 @@ char* kstrncpy(char* dest, const char* src, size_t n);
 size_t kstrlen(const char* str);
 
 
+uint32_t parse_literal(const char* s);
 char* kstrcat(char* dest, const char* src);
 void hexdump(void* ptr, int size); 
 void sleep(int ms); 
