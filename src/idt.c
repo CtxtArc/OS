@@ -407,6 +407,19 @@ void syscall_handler(struct registers *regs) {
 
         regs->eip = (uint32_t)idle_task_code;
     }
+else if (regs->eax == 5) { // CLEAR WINDOW
+        if (task_list[id].has_window && task_list[id].window_buffer) {
+            uint32_t* buf = task_list[id].window_buffer;
+            uint32_t count = sw * task_list[id].win_h;
+            uint32_t color = 0x222222; // Your standard background color
+
+            // Use 'rep stosl' for a professional, high-speed memory fill
+            __asm__ volatile ("rep stosl" : "+D"(buf), "+c"(count) : "a"(color) : "memory");
+
+            // Mark the entire window as dirty so the WM redraws it
+            mark_task_dirty(id, 0, 0, task_list[id].win_w, task_list[id].win_h);
+        }
+    }
     else if (regs->eax == 6) { // DRAW_RECT
         int rx = regs->ebx + border; int ry = regs->ecx + border;
         int rw = regs->edx; int rh = regs->esi;

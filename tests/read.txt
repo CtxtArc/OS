@@ -3,7 +3,7 @@ SET index 0
 SET draw_x 10
 SET draw_y 10
 
-LOADFILE "/DEV/URANDOM" file_ptr file_size
+LOADFILE "LOREM.TXT" file_ptr file_size
 
 CMP file_size 0
 JE file_error

@@ -1,0 +1,42 @@
+WINDOW 0 0 500 400
+SET draw_x 10
+SET draw_y 10
+
+LABEL start_stream
+    # NEW: Wipe the window buffer so we don't draw over old text
+    CLEAR
+    SET draw_x 10
+    SET draw_y 10
+
+    # Load 256 bytes of randomness from the virtual device
+    LOADFILE "/dev/urandom" file_ptr file_size
+    SET index 0
+
+LABEL read_loop
+    CMP index file_size
+    JGE refresh_data
+
+    READBYTE file_ptr index char_val
+    
+    # Print the character
+    PRINT_CHAR char_val draw_x draw_y 0x00FF00
+    
+    ADD draw_x 8
+    CMP draw_x 480
+    JL next_byte
+    SET draw_x 10
+    ADD draw_y 12
+
+    # If we hit the bottom of the window, stop and refresh
+    CMP draw_y 380
+    JGE refresh_data
+
+LABEL next_byte
+    ADD index 1
+    SLEEP 2 
+    GOTO read_loop
+
+LABEL refresh_data
+    # Free the old random buffer to prevent memory leaks in the heap
+    FREE file_ptr
+    GOTO start_stream
