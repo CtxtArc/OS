@@ -5,6 +5,8 @@
 #include "vesa.h"
 #include "kheap.h"
 #include "assembler.h"
+#include "wm.h"
+
 
 uint32_t timer_frequency = 0;
 extern volatile struct task task_list[MAX_TASKS];
@@ -30,24 +32,6 @@ char *exception_messages[] = {
     "Stack Fault", "General Protection Fault", "Page Fault", "Unknown Interrupt"
 };
 
-// --- DIRTY RECTANGLE HELPER ---
-void mark_task_dirty(int id, int x, int y, int w, int h) {
-    volatile struct task* t = &task_list[id];
-    if (!t->is_dirty) {
-        t->dirty_x = x; 
-        t->dirty_y = y; 
-        t->dirty_w = w; 
-        t->dirty_h = h;
-        t->is_dirty = 1;
-    } else {
-        int right = (x + w > t->dirty_x + t->dirty_w) ? (x + w) : (t->dirty_x + t->dirty_w);
-        int bottom = (y + h > t->dirty_y + t->dirty_h) ? (y + h) : (t->dirty_y + t->dirty_h);
-        if (x < t->dirty_x) t->dirty_x = x;
-        if (y < t->dirty_y) t->dirty_y = y;
-        t->dirty_w = right - t->dirty_x;
-        t->dirty_h = bottom - t->dirty_y;
-    }
-}
 
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_low  = (base & 0xFFFF);

@@ -476,4 +476,41 @@ void shell_compile(const char* arg) {
     kfree(binary_buf);
 }
 
+void shell_print(char* str, uint32_t color) {
+    volatile struct task* t = &task_list[current_task_idx];
+    for (int i = 0; str[i] != '\0'; i++) {
+        if (str[i] == '\n') {
+            t->cursor_x = 0;
+            t->cursor_y += 10;
+            continue;
+        }
+        shell_draw_char(str[i], t->cursor_x, t->cursor_y, color, 0x222222);
+        t->cursor_x += 8;
+        if (t->cursor_x >= t->win_w) {
+            t->cursor_x = 0;
+            t->cursor_y += 10;
+        }
+    }
+}
+
+// --- NEW HELPER FUNCTIONS: Draw directly to the Window Buffer ---
+void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
+    volatile struct task* t = &task_list[current_task_idx];
+    struct multiboot_info* mbi = VESA_get_boot_info();
+    uint32_t sw = mbi->framebuffer_width;
+
+    if (!t->has_window || !t->window_buffer) return;
+    
+    uint8_t* glyph = font8x8_basic[(unsigned char)c];
+    for (int row = 0; row < 8; row++) {
+        for (int col = 0; col < 8; col++) {
+            int dx = x + col;
+            int dy = y + row;
+            if (dx >= 0 && dx < t->win_w && dy >= 0 && dy < t->win_h) {
+                if (glyph[row] & (1 << (7 - col))) t->window_buffer[(dy * sw) + dx] = fg; 
+                else t->window_buffer[(dy * sw) + dx] = bg; 
+            }
+        }
+    }
+}
 

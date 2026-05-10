@@ -87,5 +87,4 @@ void suicide_task();
 
 void save_history_to_disk();
 void load_history();
-void shell_print(char* str, uint32_t color);
 #endif
