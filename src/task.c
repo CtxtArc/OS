@@ -167,9 +167,11 @@ void shell_task() {
         char c = t->kbd_buffer[t->kbd_tail];
         t->kbd_tail = (t->kbd_tail + 1) % 64;
 
-        if (t->cursor_x >= t->win_w) {
+        // Handle typing wrapping around the right edge and scrolling
+        if (t->cursor_x >= t->win_w - 8) {
             t->cursor_x = WIN_BORDER + 2;
             t->cursor_y += 10;
+            if (t->cursor_y + 10 >= t->win_h) shell_scroll(); // Trigger Scroll
         }
 
         if (c == 4) { 
