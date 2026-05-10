@@ -9,6 +9,7 @@
 #include "kheap.h"
 #include "vesa.h"
 #include "fat.h"
+#include "idt.h"
 
 // External references for memory and info
 extern char end;
@@ -36,7 +37,7 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
 
     // 3. Hardware / Graphics
     VESA_init(mbi);
-    timer_init(1000);  
+    timer_init(TIMER_HZ);  
 
     // 4. Filesystem & Tasks
     fat_init();      // Sets up the hard drive variables

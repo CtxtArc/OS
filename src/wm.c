@@ -4,6 +4,12 @@
 #include "kheap.h"
 #include "lib.h"
 
+volatile uint32_t fps_counter = 0;
+volatile uint32_t current_fps = 0;
+uint32_t last_fps_tick = 0;
+
+extern uint32_t system_ticks; 
+
 extern uint32_t* desktop_bg_buffer;
 extern int pending_shell_spawn;
 extern volatile int keyboard_focus_tid;
@@ -142,8 +148,17 @@ void compositor_task() {
                     current_tile++;
                 }
             }
-            if (did_draw) VESA_update_rect(min_x, min_y, max_x - min_x, max_y - min_y);
-        }
+            if (did_draw) {
+                VESA_update_rect(min_x, min_y, max_x - min_x, max_y - min_y);
+                fps_counter++;
+
+                if (system_ticks - last_fps_tick >= 1000) {
+                    current_fps = fps_counter;
+                    fps_counter = 0;
+                    last_fps_tick = system_ticks;
+                }
+            }  
+      }
         yield();
     }
 }

@@ -5,7 +5,7 @@
 #define SYS_DRAW_CHAR 1
 #define SYS_GET_TICKS 2
 #define SYS_SLEEP     3
-
+#define TIMER_HZ 1000
 // For the Assembler, we would define these as constants:
 // .define SYS_DRAW_CHAR 1
 extern uint32_t timer_frequency; // Global variable to store the frequency

@@ -1,0 +1,29 @@
+WINDOW 0 0 400 300
+SET my_val 123
+SET x_pos 20
+SET y_pos 50
+
+LABEL loop
+    CLEAR
+    PRINT "NUMBER PRINT TEST" 20 20 0xFFFF00
+
+    # Test 1: Print a literal number
+    PRINT 999 20 50 0x00FF00
+    PRINT "<-- Literal 999" 60 50 0xFFFFFF
+
+    # Test 2: Print a variable
+    PRINT my_val 20 80 0x00FFFF
+    PRINT "<-- Variable my_val" 60 80 0xFFFFFF
+
+    # Test 3: Moving variable (The "Math" test)
+    PRINT x_pos 20 110 0xFF00FF
+    PRINT "<-- Changing x_pos" 60 110 0xFFFFFF
+
+    ADD x_pos 5
+    CMP x_pos 300
+    JL continue
+    SET x_pos 20
+
+LABEL continue
+    SLEEP 100
+    GOTO loop

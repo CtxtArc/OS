@@ -1,0 +1,41 @@
+WINDOW 0 0 400 150
+SET draw_x 10
+SET draw_y 50
+
+LABEL start
+    CLEAR
+    PRINT "SYSTEM UPTIME (HH:MM:SS)" 10 10 0xFFFF00
+    
+    # 1. Grab ticks
+    GET_TICKS ticks 
+    
+    # 2. Math
+    SET total_sec ticks
+    DIV total_sec 1000
+
+    SET hours total_sec
+    DIV hours 3600
+
+    SET minutes total_sec
+    DIV minutes 60
+    MOD minutes 60
+
+    SET seconds total_sec
+    MOD seconds 60
+
+    # 3. Draw UI
+    SET draw_x 10
+    PRINT_NUM hours draw_x draw_y 0x00FF00
+    ADD draw_x 30
+    PRINT ":" draw_x draw_y 0xFFFFFF
+    ADD draw_x 15
+    
+    PRINT_NUM minutes draw_x draw_y 0x00FF00
+    ADD draw_x 30
+    PRINT ":" draw_x draw_y 0xFFFFFF
+    ADD draw_x 15
+    
+    PRINT_NUM seconds draw_x draw_y 0x00FF00
+
+    SLEEP 1000
+    GOTO start

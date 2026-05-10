@@ -35,6 +35,7 @@ uint32_t vfs_read(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buf
 uint32_t vfs_write(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buffer);
 vfs_node_t* vfs_finddir(vfs_node_t* node, char* name);
 
+uint32_t dev_fps_read(struct vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer);
 uint32_t dev_clock_read(struct vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer);
 vfs_node_t* vfs_walk_path(char* path);
 #endif

@@ -99,6 +99,7 @@ void setup_virtual_devices() {
     devfs_count = 0;
     devfs_register("clock", 64, dev_clock_read);
     devfs_register("urandom", 256, dev_urandom_read);
+    devfs_register("fps", 32, dev_fps_read); 
 
     kstrcpy(devfs_root.name, "dev");
     devfs_root.flags = FS_DIRECTORY;
@@ -167,4 +168,23 @@ vfs_node_t* vfs_walk_path(char* path) {
     }
 
     return last_node;
+}
+//  /dev/fps
+uint32_t dev_fps_read(struct vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
+    extern volatile uint32_t current_fps;
+    char msg[32] = "FPS: ";
+    char num_str[16];
+    
+    itoa(current_fps, num_str, 10);
+    kstrcat(msg, num_str);
+    kstrcat(msg, "\n");
+    
+    uint32_t len = kstrlen(msg);
+    if (offset >= len) return 0;
+    
+    uint32_t to_read = len - offset;
+    if (to_read > size) to_read = size;
+    
+    kmemcpy(buffer, (uint8_t*)msg + offset, to_read);
+    return to_read;
 }
