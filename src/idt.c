@@ -521,29 +521,27 @@ void syscall_handler(struct registers *regs) {
         }
         return;
     }
-else if (regs->eax == 11) { // LOAD_FILE
-    uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
-    char* filename = (char*)(regs->ebx + aligned_code);
+else if (regs->eax == 11) { // VFS_LOAD_FILE
+        uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
+        char* path = (char*)(regs->ebx + aligned_code);
 
-    struct fat_dir_entry* entry = fat_search(filename);
-    if (entry) {
-        uint32_t file_size = entry->size;  // 1. Save size FIRST
-        void* file_data = fat_load_file(entry); // 2. Load file
-        kfree(entry);                      // 3. Free entry last
-
-        if (file_data) {
-            regs->eax = (uint32_t)file_data;
-            regs->ecx = file_size;         // 4. Use saved size, not entry->size
+        // Use the VFS Walker instead of fat_search
+        vfs_node_t* node = vfs_walk_path(path); 
+        
+        if (node) {
+            void* buffer = kmalloc(node->size + 512); // Extra padding for safety
+            uint32_t bytes_read = vfs_read(node, 0, node->size, (uint8_t*)buffer);
+            
+            regs->eax = (uint32_t)buffer;
+            regs->ecx = bytes_read; // The size of the virtual data
+            
+            kfree(node); // Clean up the VFS node
         } else {
-            // fat_load_file returned NULL (OOM or read error)
             regs->eax = 0;
             regs->ecx = 0;
         }
-    } else {
-        regs->eax = 0;
-        regs->ecx = 0;
     }
-}    else if (regs->eax == 12) { // FREE_MEM
+  else if (regs->eax == 12) { // FREE_MEM
         // EBX holds the pointer we want to free
         void* ptr = (void*)regs->ebx;
         if (ptr != NULL && ptr != 0) {
