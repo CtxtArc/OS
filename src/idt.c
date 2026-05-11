@@ -440,34 +440,42 @@ else if (regs->eax == 5) { // CLEAR WINDOW
     else if (regs->eax == 7) { // PRINT_STR
         uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
         char* str = (char*)(regs->ebx + aligned_code);
-        
-        int sx = regs->ecx + border; 
-        int sy = regs->edx + border;
         uint32_t color = regs->edi;
 
-        int chars_printed = 0;
-        for (int i = 0; str[i] != '\0'; i++) {
-            int cur_x = sx + (i * 8);
-            unsigned char c = (unsigned char)str[i];
-            if (c > 127) c = '?'; 
+        // CHECK FOR GUI WINDOW
+        if (task_list[id].has_window && task_list[id].window_buffer) {
+            int sx = regs->ecx + border; 
+            int sy = regs->edx + border;
 
-            extern uint8_t font8x8_basic[128][8];
-            uint8_t* glyph = font8x8_basic[c];
-            
-            for (int row = 0; row < 8; row++) {
-                for (int col = 0; col < 8; col++) {
-                    if (glyph[row] & (1 << (7 - col))) {
-                        int dx = cur_x + col; 
-                        int dy = sy + row;
-                        if (dx >= 0 && dx < task_list[id].win_w && dy >= 0 && dy < task_list[id].win_h) {
-                            task_list[id].window_buffer[(dy * sw) + dx] = color;
+            int chars_printed = 0;
+            for (int i = 0; str[i] != '\0'; i++) {
+                int cur_x = sx + (i * 8);
+                unsigned char c = (unsigned char)str[i];
+                if (c > 127) c = '?'; 
+
+                extern uint8_t font8x8_basic[128][8];
+                uint8_t* glyph = font8x8_basic[c];
+                
+                for (int row = 0; row < 8; row++) {
+                    for (int col = 0; col < 8; col++) {
+                        if (glyph[row] & (1 << (7 - col))) {
+                            int dx = cur_x + col; 
+                            int dy = sy + row;
+                            if (dx >= 0 && dx < task_list[id].win_w && dy >= 0 && dy < task_list[id].win_h) {
+                                task_list[id].window_buffer[(dy * sw) + dx] = color;
+                            }
                         }
                     }
                 }
+                chars_printed++;
             }
-            chars_printed++;
+            mark_task_dirty(id, sx, sy, chars_printed * 8, 8);
+        } 
+        // HEADLESS FALLBACK (STDOUT)
+        else {
+            extern void shell_print(char* str, uint32_t color);
+            shell_print(str, color);
         }
-        mark_task_dirty(id, sx, sy, chars_printed * 8, 8);
     }
     else if (regs->eax == 8) { // CREATE_WINDOW
         task_list[id].has_window = 1;
@@ -490,14 +498,15 @@ else if (regs->eax == 5) { // CLEAR WINDOW
     }
     else if (regs->eax == 9) { // PRINT_NUM (Value is now directly in EBX)
         uint32_t actual_val = regs->ebx; // Use the value directly!
+        uint32_t color = regs->edi;      // Moved color up here for scope access
 
         char buf[16];
         itoa(actual_val, buf, 10);
         
+        // CHECK FOR GUI WINDOW
         if (task_list[id].has_window && task_list[id].window_buffer) {
             int x = regs->ecx + border; 
             int y = regs->edx + border;
-            uint32_t color = regs->edi;
 
             for (int i = 0; buf[i] != '\0'; i++) {
                 extern uint8_t font8x8_basic[128][8];
@@ -518,8 +527,13 @@ else if (regs->eax == 5) { // CLEAR WINDOW
                 }
             }
             mark_task_dirty(id, x, y, kstrlen(buf) * 8, 8);
+        } 
+        // HEADLESS FALLBACK (STDOUT)
+        else {
+            extern void shell_print(char* str, uint32_t color);
+            shell_print(buf, color);
         }
-    }    
+    }   
     // --- THE SYSCALL 10 FIX ---
     else if (regs->eax == 10) { 
         volatile struct task* t = &task_list[id];
@@ -562,30 +576,35 @@ else if (regs->eax == 11) { // VFS_LOAD_FILE
         }
     }
 else if (regs->eax == 13) { // DRAW_CHAR_COLORED
-    char c = (char)(regs->ebx & 0xFF);
-    int x = regs->ecx + border;
-    int y = regs->edx + border;
-    uint32_t color = regs->edi;
+        char c = (char)(regs->ebx & 0xFF);
+        uint32_t color = regs->edi;
 
-    if (c < 32 || c > 126) { return; } // skip non-printable
-
-    if (task_list[id].has_window && task_list[id].window_buffer) {
-        extern uint8_t font8x8_basic[128][8];
-        uint8_t* glyph = font8x8_basic[(unsigned char)c];
-        for (int row = 0; row < 8; row++) {
-            for (int col = 0; col < 8; col++) {
-                if (glyph[row] & (1 << (7 - col))) {
-                    int dx = x + col, dy = y + row;
-                    if (dx >= 0 && dx < task_list[id].win_w &&
-                        dy >= 0 && dy < task_list[id].win_h)
-                        task_list[id].window_buffer[(dy * sw) + dx] = color;
+        // CHECK FOR GUI WINDOW
+        if (task_list[id].has_window && task_list[id].window_buffer) {
+            int x = regs->ecx + border;
+            int y = regs->edx + border;
+            extern uint8_t font8x8_basic[128][8];
+            uint8_t* glyph = font8x8_basic[(unsigned char)c];
+            
+            for (int row = 0; row < 8; row++) {
+                for (int col = 0; col < 8; col++) {
+                    if (glyph[row] & (1 << (7 - col))) {
+                        int dx = x + col, dy = y + row;
+                        if (dx >= 0 && dx < task_list[id].win_w && dy >= 0 && dy < task_list[id].win_h)
+                            task_list[id].window_buffer[(dy * sw) + dx] = color;
+                    }
                 }
             }
+            mark_task_dirty(id, x, y, 8, 8);
         }
-        mark_task_dirty(id, x, y, 8, 8);
-    }
-}
-else if (regs->eax == 14) { // GET_ARGC
+        // HEADLESS FALLBACK (STDOUT)
+        else {
+            // Convert the single char into a null-terminated string for shell_print
+            char temp_str[2] = {c, '\0'};
+            extern void shell_print(char* str, uint32_t color);
+            shell_print(temp_str, color);
+        }
+    }else if (regs->eax == 14) { // GET_ARGC
         // Calculate the task's base memory exactly like Syscall 7 does
         uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
         

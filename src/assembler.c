@@ -146,7 +146,14 @@ else if (kstrcmp(cmd, "DIV") == 0 || kstrcmp(cmd, "MOD") == 0) {
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '\"') {
             char str_val[128]; p++; uint32_t s_len = 0;
-            while (*p != '\"' && *p != '\0') str_val[s_len++] = *p++;
+            while (*p != '\"' && *p != '\0') {
+                if (*p == '\\' && *(p+1) == 'n') {
+                    str_val[s_len++] = '\n'; // Insert the real ASCII 10 byte!
+                    p += 2;                  // Skip over the '\' and 'n' in the text
+                } else {
+                    str_val[s_len++] = *p++;
+                }
+            }
             str_val[s_len++] = '\0'; if (*p == '\"') p++;
             
             char t1[32], t2[32], t3[32];

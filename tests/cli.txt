@@ -1,0 +1,14 @@
+# KDXOS Headless CLI App
+# X and Y parameters (10 10) are required by the assembler syntax, 
+# but the Kernel will safely ignore them!
+
+PRINT "--- Calculating system load ---" 0 0 0x00FFFF
+PRINT "\nTotal active tasks: " 0 0 0xFFFFFF
+
+# Fake calculation for effect
+SET load 5
+ADD load 2
+PRINT_NUM load 0 0 0x00FF00
+
+PRINT "\nDone.\n" 0 0 0x00FFFF
+EXIT

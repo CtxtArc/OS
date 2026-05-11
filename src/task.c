@@ -142,7 +142,9 @@ void kill_task(int id) {
     }
 }
 
+extern volatile int shell_tid;
 void shell_task() {
+shell_tid = current_task_idx;
     while (!task_list[current_task_idx].has_window || !task_list[current_task_idx].window_ready) {
         yield(); 
     }

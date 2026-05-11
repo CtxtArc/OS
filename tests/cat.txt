@@ -1,0 +1,43 @@
+# Headless CAT Utility
+
+# 1. Check Arguments
+GET_ARGC count
+CMP count 0
+JE no_args
+
+# 2. Load File
+LOADFILE_ARG file_ptr file_size
+CMP file_size 0
+JE file_error
+
+SET index 0
+
+LABEL read_loop
+    CMP index file_size
+    JE cleanup
+
+    READBYTE file_ptr index char_val
+    
+    # Skip null characters
+    CMP char_val 0
+    JE skip_char
+
+    # Send the char to stdout (0, 0 coords are ignored by the kernel)
+    PRINT_CHAR char_val 0 0 0xAAAAAA
+
+LABEL skip_char
+    ADD index 1
+    GOTO read_loop
+
+LABEL cleanup
+    PRINT "\n" 0 0 0xFFFFFF
+    FREE file_ptr
+    EXIT
+
+LABEL no_args
+    PRINT "Usage: run cat.bin <filename>\n" 0 0 0xFF0000
+    EXIT
+
+LABEL file_error
+    PRINT "Error: File empty or not found\n" 0 0 0xFF0000
+    EXIT

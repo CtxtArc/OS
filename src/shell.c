@@ -21,6 +21,7 @@ extern uint32_t timer_frequency;
 extern uint32_t target_fps;
 extern int keyboard_focus_tid;
 extern int current_task_idx;
+volatile int shell_tid = -1;
 char shell_cwd[256] = "/";
      extern void KED_init(const char* filename); 
             extern void KED_task();                     
@@ -484,39 +485,45 @@ void shell_compile(const char* arg) {
     kfree(binary_buf);
 }
 
+// Always target TID 0 (The Kernel/Shell task) for terminal output
+#define SHELL_TID 0
+
 void shell_print(char* str, uint32_t color) {
-    volatile struct task* t = &task_list[current_task_idx];
-    int padding_x = 2; // Keep it safely off the exact edge
+    if (shell_tid < 0) return; // Safety check
+    volatile struct task* t = &task_list[shell_tid];
+    int padding_x = 2; 
 
     for (int i = 0; str[i] != '\0'; i++) {
         // Handle Newlines
         if (str[i] == '\n') {
             t->cursor_x = padding_x;
             t->cursor_y += 10;
-            if (t->cursor_y + 10 >= t->win_h) shell_scroll(); // Trigger Scroll
+            if (t->cursor_y + 10 >= t->win_h) shell_scroll(); 
             continue;
         }
         
         shell_draw_char(str[i], t->cursor_x, t->cursor_y, color, 0x222222);
         t->cursor_x += 8;
         
-        // Handle Word Wrapping (hitting the right side of the screen)
+        // Handle Word Wrapping
         if (t->cursor_x >= t->win_w - 8) {
             t->cursor_x = padding_x;
             t->cursor_y += 10;
-            if (t->cursor_y + 10 >= t->win_h) shell_scroll(); // Trigger Scroll
+            if (t->cursor_y + 10 >= t->win_h) shell_scroll(); 
         }
     }
+    mark_task_dirty(shell_tid, 0, 0, t->win_w, t->win_h);
 }
 
-// --- NEW HELPER FUNCTIONS: Draw directly to the Window Buffer ---
 void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
-    volatile struct task* t = &task_list[current_task_idx];
+    if (shell_tid < 0) return;
+    volatile struct task* t = &task_list[shell_tid];
     struct multiboot_info* mbi = VESA_get_boot_info();
     uint32_t sw = mbi->framebuffer_width;
 
     if (!t->has_window || !t->window_buffer) return;
     
+    extern uint8_t font8x8_basic[128][8];
     uint8_t* glyph = font8x8_basic[(unsigned char)c];
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
@@ -529,37 +536,28 @@ void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
         }
     }
 }
+
 void shell_scroll() {
-    volatile struct task* t = &task_list[current_task_idx];
+    if (shell_tid < 0) return;
+    volatile struct task* t = &task_list[shell_tid];
     struct multiboot_info* mbi = VESA_get_boot_info();
     uint32_t sw = mbi->framebuffer_width;
-    int scroll_y = 10; // Font height (8) + vertical padding (2)
+    int scroll_y = 10; 
 
     if (!t->has_window || !t->window_buffer) return;
 
-    // 1. Shift all pixels UP by 10 rows
     for (int y = 0; y < t->win_h - scroll_y; y++) {
         uint32_t* dst = &t->window_buffer[y * sw];
         uint32_t* src = &t->window_buffer[(y + scroll_y) * sw];
-        uint32_t count = t->win_w;
-        
-        // Super-fast RAM-to-RAM memory copy
-        __asm__ volatile ("rep movsl" : "+D"(dst), "+S"(src), "+c"(count) : : "memory");
+        __asm__ volatile ("rep movsl" : "+D"(dst), "+S"(src), "+c"(t->win_w) : : "memory");
     }
 
-    // 2. Clear the new bottom area to the background color (0x222222)
     for (int y = t->win_h - scroll_y; y < t->win_h; y++) {
         uint32_t* dst = &t->window_buffer[y * sw];
-        uint32_t count = t->win_w;
-        uint32_t val = 0x222222; // Terminal grey background
-        
-        // Super-fast memory fill
-        __asm__ volatile ("rep stosl" : "+D"(dst), "+c"(count) : "a"(val) : "memory");
+        uint32_t val = 0x222222; 
+        __asm__ volatile ("rep stosl" : "+D"(dst), "+c"(t->win_w) : "a"(val) : "memory");
     }
 
-    // 3. Move the cursor up so it stays on the screen
     t->cursor_y -= scroll_y;
-
-    // 4. Tell the Compositor (WM) that the ENTIRE window needs to be redrawn
-    mark_task_dirty(current_task_idx, 0, 0, t->win_w, t->win_h);
+    mark_task_dirty(shell_tid, 0, 0, t->win_w, t->win_h);
 }
