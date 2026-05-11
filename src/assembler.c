@@ -481,4 +481,65 @@ else if (kstrcmp(cmd, "GET_TICKS") == 0) {
         if (out_buf) { out_buf[*pos] = 0xA3; kmemcpy(&out_buf[*pos+1], &offset, 4); }
         *pos += 5;
     }
+ else if (kstrcmp(cmd, "GET_ARGC") == 0) {
+        char var_name[32]; get_token(ptr, var_name);
+        uint32_t off_dest = get_var_offset(var_name);
+        
+        // mov eax, 14 (Syscall 14)
+        if (out_buf) { out_buf[*pos] = 0xB8; out_buf[*pos+1] = 0x0E; out_buf[*pos+2] = 0; out_buf[*pos+3] = 0; out_buf[*pos+4] = 0; } *pos += 5;
+        
+        // int 0x80
+        if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; } *pos += 2;
+        
+        // mov [off_dest], eax (Save the result to our script variable)
+        if (out_buf) { out_buf[*pos] = 0xA3; kmemcpy(&out_buf[*pos+1], &off_dest, 4); } *pos += 5;
+    }else if (kstrcmp(cmd, "PRINT_ARGS") == 0) {
+        char t1[32], t2[32], t3[32];
+        ptr = get_token(ptr, t1); ptr = get_token(ptr, t2); ptr = get_token(ptr, t3);
+        uint32_t off_argv = 2804; // The string starts 4 bytes after argc
+
+        // Syscall 7 (PRINT_STR) expects:
+        // EAX = 7
+        // EBX = offset to string
+        // ECX = X, EDX = Y, EDI = Color
+
+        if (out_buf) { 
+            // mov eax, 7
+            out_buf[*pos] = 0xB8; uint32_t call=7; kmemcpy(&out_buf[*pos+1], &call, 4); *pos += 5;
+            // mov ebx, 2804 (The offset to the argument string)
+            out_buf[*pos] = 0xBB; kmemcpy(&out_buf[*pos+1], &off_argv, 4); *pos += 5;
+        } else {
+            *pos += 10;
+        }
+
+        emit_load(0xB9, t1, out_buf, pos); // Load X into ECX
+        emit_load(0xBA, t2, out_buf, pos); // Load Y into EDX
+        emit_load(0xBF, t3, out_buf, pos); // Load Color into EDI
+        
+        if (out_buf) { 
+            out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; // int 0x80
+        }
+        *pos += 2;
+    }
+// --- NEW: LOADFILE_ARG ptr_var size_var ---
+    // Loads the file specified by the command-line argument string
+    else if (kstrcmp(cmd, "LOADFILE_ARG") == 0) {
+        char var_ptr[32], var_size[32];
+        ptr = get_token(ptr, var_ptr); ptr = get_token(ptr, var_size);
+        
+        uint32_t off_argv = 2804; // The injected argument string from the kernel
+        
+        // 1. Call Syscall 11 (VFS_LOAD_FILE)
+        if (out_buf) { out_buf[*pos] = 0xB8; uint32_t call=11; kmemcpy(&out_buf[*pos+1], &call, 4); } *pos += 5; // EAX = 11
+        if (out_buf) { out_buf[*pos] = 0xBB; kmemcpy(&out_buf[*pos+1], &off_argv, 4); } *pos += 5; // EBX = 2804
+        if (out_buf) { out_buf[*pos] = 0xCD; out_buf[*pos+1] = 0x80; } *pos += 2; // INT 0x80
+        
+        // 2. Save EAX (Memory Pointer) into var_ptr
+        uint32_t off_ptr = get_var_offset(var_ptr);
+        if (out_buf) { out_buf[*pos] = 0xA3; kmemcpy(&out_buf[*pos+1], &off_ptr, 4); } *pos += 5;
+        
+        // 3. Save ECX (File Size) into var_size
+        uint32_t off_size = get_var_offset(var_size);
+        if (out_buf) { out_buf[*pos] = 0x89; out_buf[*pos+1] = 0x0D; kmemcpy(&out_buf[*pos+2], &off_size, 4); } *pos += 6;
+    }
 }

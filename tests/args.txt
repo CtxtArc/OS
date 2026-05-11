@@ -1,0 +1,16 @@
+WINDOW 0 0 400 200
+LABEL start
+    CLEAR
+    PRINT "ARGUMENT CHECK" 10 10 0xFFFF00
+
+    GET_ARGC count
+    
+    # Debug: Print the raw number 'count'
+    PRINT "Arg Count:" 10 40 0xFFFFFF
+    PRINT_NUM count 100 40 0x00FF00
+
+    PRINT "Arg String:" 10 70 0xFFFFFF
+    PRINT_ARGS 10 90 0x00FFFF
+
+    SLEEP 500
+    GOTO start

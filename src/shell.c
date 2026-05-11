@@ -360,45 +360,53 @@ void execute_command(char* input) {
         shell_print("Background Timer Spawned.\n", COLOR_GREEN);
     }
     // --- EXECUTION ---
-    else if (kstrcasecmp(input, "RUN") == 0) {
+   else if (kstrcasecmp(input, "RUN") == 0) {
         if (arg) {
-            struct fat_dir_entry* entry = fat_search(arg);
+            char filename[32];
+            char* app_args = NULL;
+            int k = 0;
+
+            // 1. Separate filename from arguments
+            while (arg[k] != ' ' && arg[k] != '\0' && k < 31) {
+                filename[k] = arg[k];
+                k++;
+            }
+            filename[k] = '\0';
+
+            if (arg[k] == ' ') {
+                app_args = &arg[k + 1];
+                while (*app_args == ' ') app_args++; // Skip extra spaces
+            }
+
+            struct fat_dir_entry* entry = fat_search(filename);
             if (entry) {
                 uint32_t size = entry->size;
                 char* file_data = fat_load_file(entry);
-                void* raw_code = kmalloc(size + 4096);
-                
-                //kfree(entry); 
-                
+                void* raw_code = kmalloc(size + 8192); // Extra space for variables/args
+
                 if (raw_code) {
                     uint32_t aligned_code = ((uint32_t)raw_code + 0xFFF) & 0xFFFFF000;
                     kmemcpy((void*)aligned_code, file_data, size);
                     kfree(file_data);
+
+                    // code_ptr MUST be the raw kmalloc pointer for task_set_arguments to work
+                    int tid = spawn_task((void(*)())aligned_code, raw_code, filename);
                     
-                    int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
                     if (tid >= 0) {
+                        if (app_args && *app_args != '\0') {
+                            task_set_arguments(tid, app_args);
+                        }
                         task_create_window(tid, 0, 0, 0, 0);
-                        shell_print("Task Spawned successfully.\n", COLOR_GREEN);
-                    } 
-                    else if (tid == ERR_TASK_TABLE_FULL) {
-                        shell_print("Spawn Error: Task table is full (MAX_TASKS reached).\n", COLOR_RED);
-                        kfree(raw_code); 
-                    } 
-                    else if (tid == ERR_TASK_STACK_OOM) {
-                        shell_print("Spawn Error: Not enough memory for task stack.\n", COLOR_RED);
-                        kfree(raw_code); 
+                    } else {
+                        kfree(raw_code);
                     }
-                    else {
-                        shell_print("Spawn Error: Unknown failure.\n", COLOR_RED);
-                        kfree(raw_code); 
-                    }
-                } else {
-                    if (file_data) kfree(file_data); 
                 }
-            } else shell_print("File not found.\n", COLOR_RED);
+            } else {
+                shell_print("File not found.\n", COLOR_RED);
+            }
         }
-    }
-    else if (kstrcasecmp(input, "COMPILE") == 0) {
+    }   
+  else if (kstrcasecmp(input, "COMPILE") == 0) {
         if (arg) shell_compile(arg);
         else shell_print("Usage: COMPILE <file.txt>\n", COLOR_RED);
     }

@@ -573,3 +573,21 @@ void save_history_to_disk() {
     fat_write_file("HISTORY.TXT", big_buf);
     kfree(big_buf);
 }
+void task_set_arguments(int tid, char* arg_string) {
+    if (tid <= 0 || !arg_string || !task_list[tid].code_ptr) return;
+
+    // Use aligned_code so it perfectly matches the Syscall expectations
+    uint32_t aligned_code = ((uint32_t)task_list[tid].code_ptr + 0xFFF) & 0xFFFFF000;
+    
+    uint32_t* argc_ptr = (uint32_t*)(aligned_code + 2800);
+    char* argv_buf     = (char*)(aligned_code + 2804);
+
+    int count = 0, in_word = 0, i = 0;
+    for (i = 0; arg_string[i] != '\0' && i < 127; i++) {
+        argv_buf[i] = arg_string[i];
+        if (arg_string[i] != ' ' && !in_word) { in_word = 1; count++; }
+        else if (arg_string[i] == ' ') { in_word = 0; }
+    }
+    argv_buf[i] = '\0';
+    *argc_ptr = count;
+}

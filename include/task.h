@@ -87,4 +87,6 @@ void suicide_task();
 
 void save_history_to_disk();
 void load_history();
+
+void task_set_arguments(int tid, char* arg_string);
 #endif

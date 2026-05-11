@@ -585,4 +585,12 @@ else if (regs->eax == 13) { // DRAW_CHAR_COLORED
         mark_task_dirty(id, x, y, 8, 8);
     }
 }
+else if (regs->eax == 14) { // GET_ARGC
+        // Calculate the task's base memory exactly like Syscall 7 does
+        uint32_t aligned_code = ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
+        
+        // Read the injected value and return it in EAX
+        uint32_t* argc_ptr = (uint32_t*)(aligned_code + 2800);
+        regs->eax = *argc_ptr; 
+    }
 }
