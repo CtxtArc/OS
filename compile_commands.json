@@ -1,0 +1,380 @@
+[
+  {
+    "file": "src/assembler.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/assembler.c",
+      "-o",
+      "build/assembler.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/assembler.o"
+  },
+  {
+    "file": "src/bmp.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/bmp.c",
+      "-o",
+      "build/bmp.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/bmp.o"
+  },
+  {
+    "file": "src/fat.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/fat.c",
+      "-o",
+      "build/fat.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/fat.o"
+  },
+  {
+    "file": "src/font.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/font.c",
+      "-o",
+      "build/font.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/font.o"
+  },
+  {
+    "file": "src/gdt.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/gdt.c",
+      "-o",
+      "build/gdt.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/gdt.o"
+  },
+  {
+    "file": "src/idt.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/idt.c",
+      "-o",
+      "build/idt.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/idt.o"
+  },
+  {
+    "file": "src/io.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/io.c",
+      "-o",
+      "build/io.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/io.o"
+  },
+  {
+    "file": "src/KED.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/KED.c",
+      "-o",
+      "build/KED.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/KED.o"
+  },
+  {
+    "file": "src/kernel.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/kernel.c",
+      "-o",
+      "build/kernel.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/kernel.o"
+  },
+  {
+    "file": "src/kheap.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/kheap.c",
+      "-o",
+      "build/kheap.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/kheap.o"
+  },
+  {
+    "file": "src/lib.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/lib.c",
+      "-o",
+      "build/lib.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/lib.o"
+  },
+  {
+    "file": "src/paging.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/paging.c",
+      "-o",
+      "build/paging.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/paging.o"
+  },
+  {
+    "file": "src/pmm.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/pmm.c",
+      "-o",
+      "build/pmm.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/pmm.o"
+  },
+  {
+    "file": "src/shell.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/shell.c",
+      "-o",
+      "build/shell.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/shell.o"
+  },
+  {
+    "file": "src/task.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/task.c",
+      "-o",
+      "build/task.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/task.o"
+  },
+  {
+    "file": "src/vesa.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/vesa.c",
+      "-o",
+      "build/vesa.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/vesa.o"
+  },
+  {
+    "file": "src/vfs.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/vfs.c",
+      "-o",
+      "build/vfs.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/vfs.o"
+  },
+  {
+    "file": "src/wm.c",
+    "arguments": [
+      "/usr/sbin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-Iinclude",
+      "-fno-stack-protector",
+      "-fno-builtin",
+      "-c",
+      "src/wm.c",
+      "-o",
+      "build/wm.o"
+    ],
+    "directory": "/home/dark0dex/coding/c/OS",
+    "output": "build/wm.o"
+  }
+]

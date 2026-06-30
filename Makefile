@@ -1,7 +1,17 @@
 CC = gcc
 AS = nasm
 # -Iinclude allows using #include "header.h" instead of paths
-CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -std=gnu99 -Iinclude
+#CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -std=gnu99 -fno-stack-protector -Iinclude
+CFLAGS = -m32 \
+         -ffreestanding \
+         -O0 \
+         -Wall -Wextra \
+         -std=gnu99 \
+         -Iinclude \
+         -fno-stack-protector \
+         -fno-pic \
+         -fno-pie \
+         -fno-builtin
 LDFLAGS = -T linker.ld -m32 -nostdlib -ffreestanding -Wl,--build-id=none -Wl,-z,noexecstack -no-pie
 
 # Directories
@@ -96,7 +106,7 @@ $(KERNEL_ISO): $(KERNEL_BIN)
 run:
 	qemu-system-i386 -cdrom $(KERNEL_ISO) -hda disk.img -boot d \
 	-vga std \
-	-display sdl,gl=on \
+	-display sdl \
 	-m 256
 
 clean:
