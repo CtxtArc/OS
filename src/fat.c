@@ -2,6 +2,7 @@
 #include "io.h"
 #include "kheap.h"
 #include "lib.h"
+#include "task.h"
 #include "vesa.h"
 #include "vfs.h"
 #include <stdint.h>
@@ -337,14 +338,18 @@ void fat_print_name_ext(unsigned char *name, unsigned char *ext) {
   }
 }
 
+static uint16_t free_cluster_hint_sector = 0;
+
 uint16_t fat_find_free_cluster() {
   uint8_t fat_buffer[512];
-  for (uint32_t s = 0; s < bpb.fat_size_16; s++) {
+  for (uint32_t pass = 0; pass < bpb.fat_size_16; pass++) {
+    uint32_t s = (free_cluster_hint_sector + pass) % bpb.fat_size_16;
     ide_read_sector(first_fat_sector + s, fat_buffer);
     uint16_t *entries = (uint16_t *)fat_buffer;
 
     for (int i = 0; i < 256; i++) {
       if (entries[i] == 0x0000) {
+        free_cluster_hint_sector = s;
         return (s * 256) + i;
       }
     }
@@ -364,8 +369,13 @@ void fat_update_table(uint16_t cluster, uint16_t value) {
 }
 
 void ide_write_sector(uint32_t lba, uint8_t *buffer) {
-  while (inb(0x1F7) & 0x80)
-    ;
+  uint32_t spins = 0;
+  while (inb(0x1F7) & 0x80) {
+    if (++spins > 100000) { // safety valve only, not the normal path
+      kprintf_unsync("IDE Error: read timeout\n");
+      return;
+    }
+  }
 
   outb(0x1F6, 0xE0 | ((lba >> 24) & 0x0F));
   outb(0x1F2, 1);
@@ -382,15 +392,20 @@ void ide_write_sector(uint32_t lba, uint8_t *buffer) {
       kprintf_unsync("IDE Error during write!\n");
       return;
     }
+    yield();
   }
 
   uint16_t *ptr = (uint16_t *)buffer;
   for (int i = 0; i < 256; i++) {
     outw(0x1F0, ptr[i]);
   }
-
-  while (inb(0x1F7) & 0x80)
-    ;
+  spins = 0;
+  while (inb(0x1F7) & 0x80) {
+    if (++spins > 100000) { // safety valve only, not the normal path
+      kprintf_unsync("IDE Error: read timeout\n");
+      return;
+    }
+  }
 }
 
 void fat_mkdir(const char *dirname) {
@@ -809,8 +824,13 @@ void ide_read_sector(uint32_t lba, uint8_t *buffer) {
   outb(IDE_PRIMARY_LBA_HIGH, (uint8_t)(lba >> 16));
   outb(IDE_PRIMARY_COMMAND, 0x20);
 
-  while (!(inb(IDE_PRIMARY_COMMAND) & 0x08))
-    ;
+  uint32_t spins = 0;
+  while (!(inb(IDE_PRIMARY_COMMAND) & 0x08)) {
+    if (++spins > 100000) { // safety valve only, not the normal path
+      kprintf_unsync("IDE Error: read timeout\n");
+      return;
+    }
+  }
 
   uint16_t *ptr = (uint16_t *)buffer;
   for (int i = 0; i < 256; i++) {

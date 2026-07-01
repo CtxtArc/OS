@@ -17,18 +17,94 @@ extern int vesa_updating;
 extern int vesa_dirty;
 extern void shell_task(); // So the WM can spawn the shell
 
+// ---------------------------------------------------------------------
+// COMPOSITOR CANVAS -- the real "back buffer" of the window manager.
+//
+// The compositor never draws directly into the video layer's back
+// buffer anymore. It composites the whole desktop into this private,
+// RAM-only canvas (single writer: this task, nobody else touches it),
+// and only blits the FINISHED, self-consistent frame into whatever
+// VESA_get_back_buffer() currently returns, immediately before
+// presenting it. Two consequences:
+//
+//   1. The video layer can never be handed a half-drawn frame -- the
+//      canvas is always complete before we ever copy out of it.
+//   2. We no longer care whether VESA_flip() swaps buffer pointers,
+//      blits, or anything else internally: we fetch the destination
+//      fresh, right here, on every single present. A stale cached
+//      pointer can never cause us to write into the buffer currently
+//      being scanned out (which is what was causing the flicker).
+// ---------------------------------------------------------------------
+static uint32_t *canvas = NULL;
+static uint32_t canvas_w = 0;
+static uint32_t canvas_h = 0;
+
+static int canvas_init(uint32_t sw, uint32_t sh) {
+  if (canvas)
+    return 1;
+  canvas = (uint32_t *)kmalloc(sw * sh * 4);
+  if (!canvas)
+    return 0;
+  canvas_w = sw;
+  canvas_h = sh;
+  return 1;
+}
+
+// Blit a sub-rectangle of the canvas into the CURRENT hardware back
+// buffer. The destination pointer is fetched fresh on every call --
+// never cached across frames/calls.
+static void canvas_present_rect(int x, int y, int w, int h) {
+  if (!canvas)
+    return;
+
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x + w > (int)canvas_w)
+    w = canvas_w - x;
+  if (y + h > (int)canvas_h)
+    h = canvas_h - y;
+  if (w <= 0 || h <= 0)
+    return;
+
+  uint32_t *dest_base = VESA_get_back_buffer();
+
+  for (int row = 0; row < h; row++) {
+    uint32_t *tmp_dest = &dest_base[(y + row) * canvas_w + x];
+    uint32_t *tmp_src = &canvas[(y + row) * canvas_w + x];
+    uint32_t count = w;
+    __asm__ volatile("rep movsl"
+                     : "+D"(tmp_dest), "+S"(tmp_src), "+c"(count)
+                     :
+                     : "memory");
+  }
+}
+
 void compositor_task() {
   struct multiboot_info *mbi = VESA_get_boot_info();
   uint32_t sw = mbi->framebuffer_width;
   uint32_t sh = mbi->framebuffer_height;
   int last_gui_count = -1;
 
+  if (!canvas_init(sw, sh)) {
+    // Couldn't allocate the canvas -- nothing safe to do, the desktop
+    // simply can't composite. (At 1024x768x32bpp this is ~3MB, make
+    // sure kheap has room for it.)
+    while (1)
+      yield();
+  }
+
   while (1) {
     if (vesa_updating) {
       yield();
       continue;
     }
-    uint32_t *b_buffer = VESA_get_back_buffer();
+
     if (pending_shell_spawn) {
       pending_shell_spawn = 0;
       int new_tid = spawn_task(shell_task, NULL, "shell");
@@ -53,11 +129,10 @@ void compositor_task() {
       last_gui_count = gui_tasks;
       refresh_tiling_layout();
 
-      // THE FIX: Temporary local pointers so Assembly doesn't destroy our
-      // variables!
+      // Render the background into the CANVAS (not the video buffer).
       if (desktop_bg_buffer) {
         uint32_t count = sw * sh;
-        uint32_t *tmp_dest = b_buffer;
+        uint32_t *tmp_dest = canvas;
         uint32_t *tmp_src = desktop_bg_buffer;
         __asm__ volatile("rep movsl"
                          : "+D"(tmp_dest), "+S"(tmp_src), "+c"(count)
@@ -66,7 +141,7 @@ void compositor_task() {
       } else {
         uint32_t count = sw * sh;
         uint32_t val = 0x000033;
-        uint32_t *tmp_dest = b_buffer;
+        uint32_t *tmp_dest = canvas;
         __asm__ volatile("rep stosl"
                          : "+D"(tmp_dest), "+c"(count)
                          : "a"(val)
@@ -86,7 +161,7 @@ void compositor_task() {
                                    : tile_width;
 
           for (uint32_t y = 0; y < sh; y++) {
-            uint32_t *tmp_dest = &b_buffer[y * sw + start_x];
+            uint32_t *tmp_dest = &canvas[y * sw + start_x];
             uint32_t *tmp_src = &task_list[i].window_buffer[y * sw];
             uint32_t count = current_tile_w;
             __asm__ volatile("rep movsl"
@@ -99,12 +174,12 @@ void compositor_task() {
               (keyboard_focus_tid == i) ? 0x00FFFF : 0x555555;
           for (int b = 0; b < WIN_BORDER; b++) {
             for (int x = 0; x < current_tile_w; x++) {
-              b_buffer[(b * sw) + start_x + x] = border_color;
-              b_buffer[((sh - 1 - b) * sw) + start_x + x] = border_color;
+              canvas[(b * sw) + start_x + x] = border_color;
+              canvas[((sh - 1 - b) * sw) + start_x + x] = border_color;
             }
             for (uint32_t y = 0; y < sh; y++) {
-              b_buffer[(y * sw) + start_x + b] = border_color;
-              b_buffer[(y * sw) + start_x + current_tile_w - 1 - b] =
+              canvas[(y * sw) + start_x + b] = border_color;
+              canvas[(y * sw) + start_x + current_tile_w - 1 - b] =
                   border_color;
             }
           }
@@ -112,6 +187,9 @@ void compositor_task() {
           current_tile++;
         }
       }
+
+      // Present: blit the whole finished frame, then flip.
+      canvas_present_rect(0, 0, sw, sh);
       vesa_dirty = 1;
       VESA_flip();
       continue;
@@ -143,8 +221,7 @@ void compositor_task() {
 
             if (dw > 0 && dh > 0) {
               for (int r = 0; r < dh; r++) {
-                uint32_t *tmp_dest =
-                    &b_buffer[((dy + r) * sw) + (start_x + dx)];
+                uint32_t *tmp_dest = &canvas[((dy + r) * sw) + (start_x + dx)];
                 uint32_t *tmp_src =
                     &task_list[i].window_buffer[((dy + r) * sw) + dx];
                 uint32_t count = dw;
@@ -158,12 +235,12 @@ void compositor_task() {
                   (keyboard_focus_tid == i) ? 0x00FFFF : 0x555555;
               for (int b = 0; b < WIN_BORDER; b++) {
                 for (int x = 0; x < current_tile_w; x++) {
-                  b_buffer[(b * sw) + start_x + x] = border_color;
-                  b_buffer[((sh - 1 - b) * sw) + start_x + x] = border_color;
+                  canvas[(b * sw) + start_x + x] = border_color;
+                  canvas[((sh - 1 - b) * sw) + start_x + x] = border_color;
                 }
                 for (uint32_t y = 0; y < sh; y++) {
-                  b_buffer[(y * sw) + start_x + b] = border_color;
-                  b_buffer[(y * sw) + start_x + current_tile_w - 1 - b] =
+                  canvas[(y * sw) + start_x + b] = border_color;
+                  canvas[(y * sw) + start_x + current_tile_w - 1 - b] =
                       border_color;
                 }
               }
@@ -183,6 +260,9 @@ void compositor_task() {
         }
       }
       if (did_draw) {
+        // Blit only the changed region from canvas -> hardware buffer,
+        // then present just that region.
+        canvas_present_rect(min_x, min_y, max_x - min_x, max_y - min_y);
         VESA_update_rect(min_x, min_y, max_x - min_x, max_y - min_y);
         fps_counter++;
 
@@ -196,6 +276,7 @@ void compositor_task() {
     yield();
   }
 }
+
 void task_create_window(int tid, int x, int y, int w, int h) {
   if (tid < 0 || tid >= MAX_TASKS)
     return;

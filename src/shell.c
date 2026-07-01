@@ -698,6 +698,9 @@ void shell_print(struct task *t, char *str, uint32_t color) {
     return;
 
   int padding_x = WIN_BORDER + 2;
+  int min_x = t->cursor_x, min_y = t->cursor_y;
+  int max_x = t->cursor_x, max_y = t->cursor_y;
+  int scrolled = 0;
 
   for (int i = 0; str[i] != '\0'; i++) {
 
@@ -705,13 +708,23 @@ void shell_print(struct task *t, char *str, uint32_t color) {
       t->cursor_x = padding_x;
       t->cursor_y += 10;
 
-      if (t->cursor_y + 10 >= t->win_h)
-        shell_scroll(t);
-
+      if (t->cursor_y + 10 >= t->win_h) {
+        shell_scroll(t); // shell_scroll() already marks the whole window dirty
+        scrolled = 1;
+      }
       continue;
     }
 
     shell_draw_char(str[i], t->cursor_x, t->cursor_y, color, 0x222222);
+
+    if (t->cursor_x < min_x)
+      min_x = t->cursor_x;
+    if (t->cursor_y < min_y)
+      min_y = t->cursor_y;
+    if (t->cursor_x + 8 > max_x)
+      max_x = t->cursor_x + 8;
+    if (t->cursor_y + 8 > max_y)
+      max_y = t->cursor_y + 8;
 
     t->cursor_x += 8;
 
@@ -719,12 +732,19 @@ void shell_print(struct task *t, char *str, uint32_t color) {
       t->cursor_x = padding_x;
       t->cursor_y += 10;
 
-      if (t->cursor_y + 10 >= t->win_h)
+      if (t->cursor_y + 10 >= t->win_h) {
         shell_scroll(t);
+        scrolled = 1;
+      }
     }
   }
 
-  mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
+  if (!scrolled) {
+    mark_task_dirty(get_current_task_id(), min_x, min_y, max_x - min_x,
+                    max_y - min_y);
+  }
+  // if scrolled, shell_scroll() already issued the (unavoidable) full-window
+  // dirty mark — no need to also mark the tiny glyph region on top of it.
 }
 void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
   if (shell_tid < 0)
