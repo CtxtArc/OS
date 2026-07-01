@@ -24,7 +24,6 @@ extern uint32_t *VESA_get_back_buffer();
 volatile int keyboard_focus_tid = 0;
 extern int vesa_updating;
 extern int vesa_dirty;
-extern void switch_to_stack(uint32_t *old_esp, uint32_t new_esp);
 extern volatile uint32_t system_ticks;
 volatile int multitasking_enabled = 0;
 volatile struct task task_list[MAX_TASKS];
@@ -33,35 +32,38 @@ extern volatile int klog_needs_sync;
 extern char klog_ram_buffer[];
 extern uint8_t font8x8_basic[128][8];
 
-void schedule() {
+uint32_t schedule_next(uint32_t current_esp) {
   if (!multitasking_enabled)
-    return;
+    return current_esp;
 
-  int old_idx = current_task_idx;
-  int next_idx = current_task_idx;
+  // 1. Save the current task's state (unless it died)
+  if (task_list[current_task_idx].state != 0) {
+    task_list[current_task_idx].esp = current_esp;
+  }
 
+  // 2. Wake up sleeping tasks
   for (int i = 0; i < MAX_TASKS; i++) {
     if (task_list[i].state == 2) {
       if (task_list[i].sleep_ticks > 0) {
         task_list[i].sleep_ticks--;
       } else {
-        task_list[i].state = 1;
+        task_list[i].state = 1; // Wake up!
       }
     }
   }
 
+  // 3. Find the next READY (state == 1) task
+  int next_idx = current_task_idx;
   do {
-    next_idx++;
-    if (next_idx >= MAX_TASKS)
-      next_idx = 0;
-  } while (task_list[next_idx].state != 1 && next_idx != old_idx);
+    next_idx = (next_idx + 1) % MAX_TASKS;
+  } while (task_list[next_idx].state != 1 && next_idx != current_task_idx);
 
-  if (next_idx != old_idx) {
-    current_task_idx = next_idx;
-    task_list[next_idx].total_ticks++;
-    switch_to_stack((uint32_t *)&task_list[old_idx].esp,
-                    task_list[next_idx].esp);
-  }
+  // 4. Update the current task tracker
+  current_task_idx = next_idx;
+  task_list[current_task_idx].total_ticks++;
+
+  // 5. Return the new task's stack pointer
+  return task_list[current_task_idx].esp;
 }
 
 int spawn_task(void (*entry_point)(), void *code_ptr, char *name) {
@@ -274,7 +276,10 @@ void shell_task() {
 
 uint32_t task_stacks[MAX_TASKS][1024];
 
-void yield() { __asm__ volatile("hlt"); }
+void yield() {
+  __asm__ volatile(
+      "int $32"); // Triggers irq0_handler, forcing a clean context switch
+}
 
 void idle_task_code() {
   while (1)

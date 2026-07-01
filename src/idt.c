@@ -7,6 +7,7 @@
 #include "vesa.h"
 #include "vfs.h"
 #include "wm.h"
+#include <stdint.h>
 
 uint32_t timer_frequency = 0;
 extern volatile struct task task_list[MAX_TASKS];
@@ -16,14 +17,13 @@ volatile uint32_t system_ticks = 0;
 struct idt_entry idt[256];
 struct idt_ptr idtp;
 extern void isr128_stub();
-
+extern uint32_t schedule_next(uint32_t current_esp);
 // THE FIX: Mark this volatile so the Compositor loop actually sees the changes!
 extern volatile int keyboard_focus_tid;
 
 extern int vesa_updating;
 extern void idle_task_code();
 extern volatile int multitasking_enabled;
-volatile uint32_t next_stack_ptr = 0;
 
 char *exception_messages[] = {"Division By Zero",
                               "Debug",
@@ -190,47 +190,13 @@ void isr_handler(struct registers *r) {
   }
 }
 
-void timer_handler(struct registers *regs) {
+uint32_t timer_handler(struct registers *regs) {
   system_ticks++;
+  outb(0x20, 0x20); // ACK the interrupt to the PIC early
 
-  if (multitasking_enabled) {
-    if (task_list[current_task_idx].state != 0)
-      task_list[current_task_idx].total_ticks++;
-
-    for (int i = 0; i < MAX_TASKS; i++) {
-      if (task_list[i].state == 2) {
-        if (task_list[i].sleep_ticks > 0)
-          task_list[i].sleep_ticks--;
-        if (task_list[i].sleep_ticks == 0)
-          task_list[i].state = 1;
-      }
-    }
-
-    task_list[current_task_idx].esp = (uint32_t)regs;
-
-    int next_task = (current_task_idx + 1) % MAX_TASKS;
-    int found = -1;
-    for (int i = 0; i < MAX_TASKS; i++) {
-      int idx = (next_task + i) % MAX_TASKS;
-      if (task_list[idx].state == 1) {
-        found = idx;
-        break;
-      }
-    }
-
-    if (found == -1) {
-      if (task_list[current_task_idx].state == 1)
-        found = current_task_idx;
-      else
-        found = 0;
-    }
-
-    current_task_idx = found;
-    next_stack_ptr = task_list[current_task_idx].esp;
-  }
-  outb(0x20, 0x20);
+  // Let the central scheduler decide what happens next
+  return schedule_next((uint32_t)regs);
 }
-
 int is_extended = 0;
 
 #define KBD_UP 11
@@ -238,13 +204,13 @@ int is_extended = 0;
 #define KBD_LEFT 13
 #define KBD_RIGHT 14
 
-void keyboard_handler(struct registers *regs) {
+uint32_t keyboard_handler(struct registers *regs) {
   uint8_t scancode = inb(0x60);
 
   if (scancode == 0xE0) {
     is_extended = 1;
     outb(0x20, 0x20);
-    return;
+    return (uint32_t)regs;
   }
 
   if (scancode & 0x80) {
@@ -261,7 +227,7 @@ void keyboard_handler(struct registers *regs) {
     }
     is_extended = 0;
     outb(0x20, 0x20);
-    return;
+    return (uint32_t)regs;
   }
 
   char c = 0;
@@ -294,16 +260,8 @@ void keyboard_handler(struct registers *regs) {
 
       while (next != start) {
         if (task_list[next].state != 0 && task_list[next].has_window) {
-
-          // 1. Mark the old focused window fully dirty to redraw its Grey
-          // border
           mark_task_dirty(keyboard_focus_tid, 0, 0, 4000, 4000);
-
-          // 2. Switch focus
           keyboard_focus_tid = next;
-
-          // 3. Mark the new focused window fully dirty to redraw its Cyan
-          // border
           mark_task_dirty(keyboard_focus_tid, 0, 0, 4000, 4000);
 
           if (task_list[next].state == 3)
@@ -330,18 +288,20 @@ void keyboard_handler(struct registers *regs) {
       target->kbd_buffer[target->kbd_head] = c;
       target->kbd_head = next;
 
+      // THE FIX: Immediately switch to the task waiting for input
       if (target->state == 3) {
         target->state = 1;
         task_list[current_task_idx].esp = (uint32_t)regs;
         current_task_idx = keyboard_focus_tid;
-        next_stack_ptr = task_list[current_task_idx].esp;
+        outb(0x20, 0x20); // ACK early
+        return task_list[current_task_idx].esp;
       }
     }
   }
 
   outb(0x20, 0x20);
+  return (uint32_t)regs; // Return unchanged ESP if no task switch occurred
 }
-
 void emit_mov(uint8_t reg_code, uint32_t val, uint8_t *out_buf, uint32_t *pos) {
   if (out_buf) {
     out_buf[*pos] = reg_code;
@@ -386,7 +346,7 @@ void emit_load(uint8_t reg_opcode, const char *arg, uint8_t *out_buf,
   }
 }
 
-void syscall_handler(struct registers *regs) {
+uint32_t syscall_handler(struct registers *regs) {
   __asm__ volatile("sti");
 
   struct multiboot_info *mbi = VESA_get_boot_info();
@@ -420,18 +380,16 @@ void syscall_handler(struct registers *regs) {
     }
   } else if (regs->eax == 2) { // GET_TICKS
     regs->eax = system_ticks;
-  } else if (regs->eax == 3) { // SLEEP(ms)
+  } else if (regs->eax == 3) { // SLEEP
     uint32_t ms = regs->ebx;
-    uint32_t ticks_to_sleep = (ms * timer_frequency) / 1000;
-    if (ms > 0 && ticks_to_sleep == 0)
-      ticks_to_sleep = 1;
-    task_list[id].sleep_ticks = ticks_to_sleep;
-    task_list[id].state = 2; // SLEEPING
+    task_list[id].sleep_ticks = (ms * timer_frequency) / 1000;
+    if (task_list[id].sleep_ticks == 0)
+      task_list[id].sleep_ticks = 1;
 
-    // ADD THIS: Trap the CPU here until the timer handler wakes this task up
-    while (task_list[id].state == 2) {
-      __asm__ volatile("hlt");
-    }
+    task_list[id].state = 2; // Mark as sleeping
+
+    // FIX: Yield the CPU immediately instead of getting stuck in a while loop!
+    return schedule_next((uint32_t)regs);
   } else if (regs->eax == 4) { // EXIT
     int id = current_task_idx;
 
@@ -459,6 +417,7 @@ void syscall_handler(struct registers *regs) {
     }
 
     regs->eip = (uint32_t)idle_task_code;
+    return schedule_next((uint32_t)regs);
   } else if (regs->eax == 5) { // CLEAR WINDOW
     if (task_list[id].has_window && task_list[id].window_buffer) {
       uint32_t *buf = task_list[id].window_buffer;
@@ -544,7 +503,7 @@ void syscall_handler(struct registers *regs) {
       if (!task_list[id].window_buffer) {
         kprintf_unsync("OOM: Window failed\n");
         task_list[id].has_window = 0;
-        return;
+        return (uint32_t)regs;
       }
       for (uint32_t i = 0; i < (sw * sh); i++)
         task_list[id].window_buffer[i] = 0x222222;
@@ -604,7 +563,7 @@ void syscall_handler(struct registers *regs) {
     } else {
       regs->eax = 0; // Return 0 if no key is pressed
     }
-    return;
+    return (uint32_t)regs;
   } else if (regs->eax == 11) { // VFS_LOAD_FILE
     uint32_t aligned_code =
         ((uint32_t)task_list[id].code_ptr + 0xFFF) & 0xFFFFF000;
@@ -670,4 +629,5 @@ void syscall_handler(struct registers *regs) {
     uint32_t *argc_ptr = (uint32_t *)(aligned_code + 2800);
     regs->eax = *argc_ptr;
   }
+  return (uint32_t)regs;
 }

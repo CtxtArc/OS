@@ -3,7 +3,6 @@ extern timer_handler
 extern keyboard_handler
 extern syscall_handler
 extern isr_handler
-extern next_stack_ptr    ; Defined in idt.c or task.c
 
 ; --- Macros for Processor Exceptions ---
 %macro ISR_NOERRCODE 1
@@ -57,60 +56,55 @@ ISR_NOERRCODE 31
 
 ; --- Exception Stub ---
 isr_common_stub:
-    pusha               
+    pusha                
     mov ax, ds
-    push eax            
+    push eax             
 
-    mov ax, 0x10        
+    mov ax, 0x10         
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
-    push esp            
+    push esp             
     call isr_handler
     
     add esp, 4
-    pop eax             
+    pop eax              
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     popa
-    add esp, 8          
+    add esp, 8           
     iret
 
 ; --- Hardware IRQ Handlers ---
 
 global irq0_handler
 irq0_handler:
-    push byte 0         
-    push byte 32        
-    pusha               
+    push byte 0          
+    push byte 32         
+    pusha                
     mov ax, ds
-    push eax            
+    push eax             
 
-    mov ax, 0x10        
+    mov ax, 0x10         
     mov ds, ax
     mov es, ax
 
-    push esp            
+    push esp             
     call timer_handler
-    add esp, 4          
+    add esp, 4           
 
-    ; --- TASK SWITCH LOGIC (Timer) ---
-    mov eax, [next_stack_ptr]
-    test eax, eax       
-    jz .no_switch
-    mov esp, eax        
-    mov dword [next_stack_ptr], 0 ; Clear the pointer after switch
-.no_switch:
+    ; --- UNIFIED CONTEXT SWITCH (Timer) ---
+    mov esp, eax         ; Load the stack pointer returned by C
 
-    pop eax             
+    pop eax              
     mov ds, ax
     mov es, ax
     popa
-    add esp, 8          
+    add esp, 8           
     iret
 
 global irq1_handler
@@ -120,20 +114,18 @@ irq1_handler:
     pusha
     mov ax, ds
     push eax
+    
     mov ax, 0x10
     mov ds, ax
     mov es, ax
+    
     push esp
     call keyboard_handler
     add esp, 4
 
-    ; Immediately switch to the woken task (same as irq0)
-    mov eax, [next_stack_ptr]
-    test eax, eax
-    jz .no_switch
-    mov esp, eax
-    mov dword [next_stack_ptr], 0
-.no_switch:
+    ; --- UNIFIED CONTEXT SWITCH (Keyboard Wakeup) ---
+    mov esp, eax         ; Load the stack pointer returned by C
+
     pop eax
     mov ds, ax
     mov es, ax
@@ -145,39 +137,30 @@ irq1_handler:
 
 global isr128_stub
 isr128_stub:
-    push byte 0         
-    push dword 128      
-    pusha               
+    push byte 0          
+    push dword 128       
+    pusha                
     
     mov ax, ds
-    push eax            
+    push eax             
 
-    mov ax, 0x10        
+    mov ax, 0x10         
     mov ds, ax
     mov es, ax
 
-    push esp            
+    push esp             
     call syscall_handler
+    add esp, 4           
     
-    ; THE FIX: Removed the destructive 'mov [esp + 32], eax' line here!
+    ; --- UNIFIED CONTEXT SWITCH (Syscall/Sleep) ---
+    mov esp, eax         ; Load the stack pointer returned by C
 
-    add esp, 4          
-    
-    ; --- TASK SWITCH LOGIC (Syscall/Sleep) ---
-    ; This fixes the GPF 13 by swapping stacks here instead of inside C
-    mov eax, [next_stack_ptr]
-    test eax, eax
-    jz .no_switch_syscall
-    mov esp, eax        ; Load the stack of the NEXT task
-    mov dword [next_stack_ptr], 0 ; Clear pointer
-.no_switch_syscall:
-
-    pop eax             
+    pop eax              
     mov ds, ax
     mov es, ax
 
-    popa                
-    add esp, 8          
+    popa                 
+    add esp, 8           
     iret
 
 ; --- Utility Functions ---
@@ -186,20 +169,4 @@ global idt_flush
 idt_flush:
     mov eax, [esp + 4]
     lidt [eax]
-    ret
-
-global switch_to_stack
-switch_to_stack:
-    push ebp
-    push edi
-    push esi
-    push ebx
-    mov eax, [esp + 20] 
-    mov ecx, [esp + 24] 
-    mov [eax], esp      
-    mov esp, ecx        
-    pop ebx
-    pop esi
-    pop edi
-    pop ebp
     ret

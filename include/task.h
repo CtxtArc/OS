@@ -82,7 +82,7 @@ extern int vesa_dirty; // Useful for the shell to trigger refreshes
 void klog_daemon();
 void run_startup_tests();
 void compositor_task();
-void schedule();
+uint32_t schedule_next(uint32_t current_esp);
 void suicide_task();
 
 void save_history_to_disk();
