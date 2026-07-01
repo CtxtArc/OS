@@ -772,8 +772,8 @@ void kconsole_write(struct task *t, const char *s, uint32_t fg) {
   for (int i = 0; s[i]; i++) {
     kconsole_putc(t, s[i], fg);
   }
-  int tid = t - task_list;
-  mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
+  // int tid = t - task_list;
+  // mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
 }
 
 void kconsole_clear(struct task *t, uint32_t bg_color) {
@@ -799,8 +799,8 @@ void kconsole_clear(struct task *t, uint32_t bg_color) {
   t->cursor_x = 10;
   t->cursor_y = 10;
 
-  int tid = t - task_list;
-  mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
+  // int tid = t - task_list;
+  // mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
 }
 
 void kconsole_scroll(struct task *t) {
@@ -839,7 +839,7 @@ void kconsole_scroll(struct task *t) {
 
   t->cursor_y -= scroll_y;
 
-  mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
+  // mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
 }
 
 void draw_char(struct task *t, char c, int x, int y, uint32_t fg, uint32_t bg) {
@@ -860,6 +860,6 @@ void draw_char(struct task *t, char c, int x, int y, uint32_t fg, uint32_t bg) {
       }
     }
   }
-  int tid = t - task_list;
-  mark_task_dirty(tid, x, y, 8, 8);
+  // int tid = t - task_list;
+  // mark_task_dirty(tid, x, y, 8, 8);
 }
