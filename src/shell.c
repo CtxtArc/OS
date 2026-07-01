@@ -47,26 +47,27 @@ void cmd_ls(const char *arg) {
   if (arg && arg[0] != '\0') {
     resolved = vfs_walk_path(arg, NULL);
     if (!resolved) {
-      shell_print("LS: path not found.\n", COLOR_RED);
+      shell_print_current("LS: path not found.\n", COLOR_RED);
       return;
     }
     if (!(resolved->flags & FS_DIRECTORY)) {
-      shell_print("LS: not a directory.\n", COLOR_RED);
+      shell_print_current("LS: not a directory.\n", COLOR_RED);
       kfree(resolved);
       return;
     }
     dir = resolved;
   }
 
-  shell_print("Type   Name             Size\n", 0xAAAAAA);
-  shell_print("----------------------------\n", 0xAAAAAA);
+  shell_print_current("Type   Name             Size\n", 0xAAAAAA);
+  shell_print_current("----------------------------\n", 0xAAAAAA);
 
   vfs_node_t entry;
   uint32_t index = 0;
   while (vfs_readdir(dir, index, &entry)) {
     uint32_t color = (entry.flags & FS_DIRECTORY) ? 0x00FFFF : 0xFFFFFF;
-    shell_print((entry.flags & FS_DIRECTORY) ? "[DIR]  " : "       ", color);
-    shell_print(entry.name, color);
+    shell_print_current((entry.flags & FS_DIRECTORY) ? "[DIR]  " : "       ",
+                        color);
+    shell_print_current(entry.name, color);
 
     int pad = 17 - (int)kstrlen(entry.name);
     char padbuf[20];
@@ -74,12 +75,12 @@ void cmd_ls(const char *arg) {
     for (int i = 0; i < pad && i < 19; i++)
       padbuf[pi++] = ' ';
     padbuf[pi] = '\0';
-    shell_print(padbuf, color);
+    shell_print_current(padbuf, color);
 
     char szbuf[16];
     itoa(entry.size, szbuf, 10);
-    shell_print(szbuf, 0x888888);
-    shell_print(" bytes\n", 0x888888);
+    shell_print_current(szbuf, 0x888888);
+    shell_print_current(" bytes\n", 0x888888);
 
     index++;
   }
@@ -94,17 +95,17 @@ void cmd_ls(const char *arg) {
 // ---------------------------------------------------------------------------
 void cmd_cd(const char *arg) {
   if (!arg || arg[0] == '\0') {
-    shell_print("Usage: CD <dirname>\n", COLOR_WHITE);
+    shell_print_current("Usage: CD <dirname>\n", COLOR_WHITE);
     return;
   }
 
   vfs_node_t *target = vfs_walk_path(arg, NULL);
   if (!target) {
-    shell_print("CD: Directory not found.\n", COLOR_RED);
+    shell_print_current("CD: Directory not found.\n", COLOR_RED);
     return;
   }
   if (!(target->flags & FS_DIRECTORY)) {
-    shell_print("CD: not a directory.\n", COLOR_RED);
+    shell_print_current("CD: not a directory.\n", COLOR_RED);
     kfree(target);
     return;
   }
@@ -139,8 +140,8 @@ void cmd_cd(const char *arg) {
 }
 
 void cmd_pwd(void) {
-  shell_print(shell_cwd, COLOR_WHITE);
-  shell_print("\n", COLOR_WHITE);
+  shell_print_current(shell_cwd, COLOR_WHITE);
+  shell_print_current("\n", COLOR_WHITE);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,11 +150,13 @@ void cmd_pwd(void) {
 void cmd_cat(const char *filename) {
   vfs_node_t *node = vfs_walk_path(filename, NULL);
   if (!node) {
-    shell_print("Error: File not found or is a directory.\n", COLOR_RED);
+    shell_print_current("Error: File not found or is a directory.\n",
+                        COLOR_RED);
     return;
   }
   if (node->flags & FS_DIRECTORY) {
-    shell_print("Error: File not found or is a directory.\n", COLOR_RED);
+    shell_print_current("Error: File not found or is a directory.\n",
+                        COLOR_RED);
     kfree(node);
     return;
   }
@@ -167,8 +170,8 @@ void cmd_cat(const char *filename) {
   uint32_t read = vfs_read(node, 0, node->size, (uint8_t *)buf);
   buf[read] = '\0';
 
-  shell_print(buf, COLOR_WHITE);
-  shell_print("\n", COLOR_WHITE);
+  shell_print_current(buf, COLOR_WHITE);
+  shell_print_current("\n", COLOR_WHITE);
 
   kfree(buf);
   kfree(node);
@@ -180,16 +183,16 @@ void cmd_cat(const char *filename) {
 void cmd_hexdump(const char *filename) {
   vfs_node_t *node = vfs_walk_path(filename, NULL);
   if (!node) {
-    shell_print("HEXDUMP: file not found.\n", COLOR_RED);
+    shell_print_current("HEXDUMP: file not found.\n", COLOR_RED);
     return;
   }
   if (node->flags & FS_DIRECTORY) {
-    shell_print("HEXDUMP: is a directory.\n", COLOR_RED);
+    shell_print_current("HEXDUMP: is a directory.\n", COLOR_RED);
     kfree(node);
     return;
   }
   if (node->size == 0) {
-    shell_print("File is empty.\n", COLOR_WHITE);
+    shell_print_current("File is empty.\n", COLOR_WHITE);
     kfree(node);
     return;
   }
@@ -211,7 +214,7 @@ void cmd_touch(const char *filename) {
   if (vfs_create(fs_current_dir, (char *)filename, FS_FILE) == 0) {
     kprintf_unsync("Created file: %s\n", filename);
   } else {
-    shell_print("TOUCH: could not create file.\n", COLOR_RED);
+    shell_print_current("TOUCH: could not create file.\n", COLOR_RED);
   }
 }
 
@@ -222,12 +225,12 @@ void cmd_write(const char *filename, const char *data) {
   vfs_node_t *node = vfs_finddir(fs_current_dir, (char *)filename);
   if (!node) {
     if (vfs_create(fs_current_dir, (char *)filename, FS_FILE) != 0) {
-      shell_print("WRITE: could not create file.\n", COLOR_RED);
+      shell_print_current("WRITE: could not create file.\n", COLOR_RED);
       return;
     }
     node = vfs_finddir(fs_current_dir, (char *)filename);
     if (!node) {
-      shell_print("WRITE: internal error.\n", COLOR_RED);
+      shell_print_current("WRITE: internal error.\n", COLOR_RED);
       return;
     }
   }
@@ -245,7 +248,7 @@ void cmd_mkdir(const char *dirname) {
   if (vfs_mkdir(fs_current_dir, (char *)dirname) == 0) {
     kprintf_unsync("Directory '%s' created.\n", dirname);
   } else {
-    shell_print("MKDIR: failed.\n", COLOR_RED);
+    shell_print_current("MKDIR: failed.\n", COLOR_RED);
   }
 }
 
@@ -253,7 +256,8 @@ void cmd_rm(const char *filename) {
   if (vfs_unlink(fs_current_dir, (char *)filename) == 0) {
     kprintf_unsync("File '%s' removed.\n", filename);
   } else {
-    shell_print("RM: failed (not found, or is a directory).\n", COLOR_RED);
+    shell_print_current("RM: failed (not found, or is a directory).\n",
+                        COLOR_RED);
   }
 }
 
@@ -261,7 +265,7 @@ void cmd_rmdir(const char *dirname) {
   if (vfs_rmdir(fs_current_dir, (char *)dirname) == 0) {
     kprintf_unsync("Directory '%s' removed.\n", dirname);
   } else {
-    shell_print("RMDIR: failed.\n", COLOR_RED);
+    shell_print_current("RMDIR: failed.\n", COLOR_RED);
   }
 }
 
@@ -289,7 +293,7 @@ void dummy_app() {
 // ---------------------------------------------------------------------------
 static void cmd_run(char *arg) {
   if (!arg) {
-    shell_print("Usage: RUN <file> [args]\n", COLOR_WHITE);
+    shell_print_current("Usage: RUN <file> [args]\n", COLOR_WHITE);
     return;
   }
 
@@ -311,7 +315,7 @@ static void cmd_run(char *arg) {
 
   vfs_node_t *node = vfs_walk_path(filename, NULL);
   if (!node || (node->flags & FS_DIRECTORY)) {
-    shell_print("File not found.\n", COLOR_RED);
+    shell_print_current("File not found.\n", COLOR_RED);
     if (node)
       kfree(node);
     return;
@@ -320,7 +324,7 @@ static void cmd_run(char *arg) {
   uint32_t size = node->size;
   void *raw_code = kmalloc(size + 8192); // extra space for variables/args
   if (!raw_code) {
-    shell_print("RUN: out of memory.\n", COLOR_RED);
+    shell_print_current("RUN: out of memory.\n", COLOR_RED);
     kfree(node);
     return;
   }
@@ -440,19 +444,21 @@ void execute_command(char *input) {
 
   // --- SYSTEM & INFO ---
   if (kstrcasecmp(input, "HELP") == 0) {
-    shell_print("Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL "
-                "SLEEP RUN TOP UPTIME STAT REBOOT CRASH ECHO SET_FPS TIMER "
-                "GAME HEXDUMP WRITE COMPILE KED\n",
-                COLOR_WHITE);
+    shell_print_current(
+        "Commands: LS CD CAT MKDIR RM RMDIR PWD TOUCH CLEAR PS KILL "
+        "SLEEP RUN TOP UPTIME STAT REBOOT CRASH ECHO SET_FPS TIMER "
+        "GAME HEXDUMP WRITE COMPILE KED\n",
+        COLOR_WHITE);
   } else if (kstrcasecmp(input, "SUICIDE") == 0) {
-    shell_print("Spawning SUICIDE task... watch the logs.\n", COLOR_WHITE);
+    shell_print_current("Spawning SUICIDE task... watch the logs.\n",
+                        COLOR_WHITE);
     spawn_task(suicide_task, NULL, "suicide_app");
 
   } else if (kstrcasecmp(input, "CAT") == 0) {
     if (arg)
       cmd_cat(arg);
     else
-      shell_print("Usage: CAT <file>\n", COLOR_WHITE);
+      shell_print_current("Usage: CAT <file>\n", COLOR_WHITE);
 
   } else if (kstrcasecmp(input, "LS") == 0) {
     cmd_ls(arg);
@@ -467,31 +473,31 @@ void execute_command(char *input) {
     if (arg)
       cmd_mkdir(arg);
     else
-      shell_print("Usage: MKDIR <name>\n", COLOR_WHITE);
+      shell_print_current("Usage: MKDIR <name>\n", COLOR_WHITE);
 
   } else if (kstrcasecmp(input, "RM") == 0) {
     if (arg)
       cmd_rm(arg);
     else
-      shell_print("Usage: RM <filename>\n", COLOR_WHITE);
+      shell_print_current("Usage: RM <filename>\n", COLOR_WHITE);
 
   } else if (kstrcasecmp(input, "RMDIR") == 0) {
     if (arg)
       cmd_rmdir(arg);
     else
-      shell_print("Usage: RMDIR <dirname>\n", COLOR_WHITE);
+      shell_print_current("Usage: RMDIR <dirname>\n", COLOR_WHITE);
 
   } else if (kstrcasecmp(input, "TOUCH") == 0) {
     if (arg)
       cmd_touch(arg);
     else
-      shell_print("Usage: TOUCH <filename>\n", COLOR_WHITE);
+      shell_print_current("Usage: TOUCH <filename>\n", COLOR_WHITE);
 
   } else if (kstrcasecmp(input, "HEXDUMP") == 0) {
     if (arg)
       cmd_hexdump(arg);
     else
-      shell_print("Usage: HEXDUMP <filename>\n", COLOR_RED);
+      shell_print_current("Usage: HEXDUMP <filename>\n", COLOR_RED);
 
   } else if (kstrcasecmp(input, "WRITE") == 0) {
     if (arg && kstrlen(arg) > 0) {
@@ -509,48 +515,48 @@ void execute_command(char *input) {
       if (filename && content) {
         cmd_write(filename, content);
       } else {
-        shell_print("Usage: WRITE <file> <text>\n", COLOR_RED);
+        shell_print_current("Usage: WRITE <file> <text>\n", COLOR_RED);
       }
     } else {
-      shell_print("Usage: WRITE <file> <text>\n", COLOR_RED);
+      shell_print_current("Usage: WRITE <file> <text>\n", COLOR_RED);
     }
 
   } else if (kstrcasecmp(input, "PS") == 0) {
-    shell_print("TID    NAME          STATE\n", COLOR_CYAN);
+    shell_print_current("TID    NAME          STATE\n", COLOR_CYAN);
     for (int i = 0; i < MAX_TASKS; i++) {
       if (task_list[i].state != 0) {
         char buf[16];
         itoa(i, buf, 10);
-        shell_print(buf, COLOR_WHITE);
-        shell_print("      ", COLOR_WHITE);
-        shell_print((char *)task_list[i].name, COLOR_WHITE);
+        shell_print_current(buf, COLOR_WHITE);
+        shell_print_current("      ", COLOR_WHITE);
+        shell_print_current((char *)task_list[i].name, COLOR_WHITE);
         int len = kstrlen((char *)task_list[i].name);
         for (int j = 0; j < (13 - len); j++)
-          shell_print(" ", COLOR_WHITE);
+          shell_print_current(" ", COLOR_WHITE);
         if (task_list[i].state == 1)
-          shell_print("READY\n", COLOR_GREEN);
+          shell_print_current("READY\n", COLOR_GREEN);
         else if (task_list[i].state == 2)
-          shell_print("SLEEP\n", COLOR_YELLOW);
+          shell_print_current("SLEEP\n", COLOR_YELLOW);
         else if (task_list[i].state == 3)
-          shell_print("BLOCKED\n", COLOR_RED);
+          shell_print_current("BLOCKED\n", COLOR_RED);
       }
     }
 
   } else if (kstrcasecmp(input, "UPTIME") == 0) {
     char buf[32];
     uint32_t s = system_ticks / 1000;
-    shell_print("Uptime: ", COLOR_WHITE);
+    shell_print_current("Uptime: ", COLOR_WHITE);
     itoa(s, buf, 10);
-    shell_print(buf, COLOR_CYAN);
-    shell_print("s\n", COLOR_WHITE);
+    shell_print_current(buf, COLOR_CYAN);
+    shell_print_current("s\n", COLOR_WHITE);
 
   } else if (kstrcasecmp(input, "STAT") == 0) {
-    shell_print("--- KERNEL HEAP STATISTICS ---\n", COLOR_CYAN);
+    shell_print_current("--- KERNEL HEAP STATISTICS ---\n", COLOR_CYAN);
     extern header_t *heap_start;
 #define HEAP_INITIAL_SIZE (64 * 1024 * 1024)
 
     if (!heap_start) {
-      shell_print("Heap is not initialized.\n", COLOR_RED);
+      shell_print_current("Heap is not initialized.\n", COLOR_RED);
     } else {
       uint32_t free_mem = 0;
       uint32_t used_mem = 0;
@@ -562,7 +568,8 @@ void execute_command(char *input) {
       while (curr != NULL) {
         if ((uint32_t)curr < (uint32_t)heap_start ||
             (uint32_t)curr >= heap_limit) {
-          shell_print("Error: Heap linked-list corrupted!\n", COLOR_RED);
+          shell_print_current("Error: Heap linked-list corrupted!\n",
+                              COLOR_RED);
           break;
         }
         if (curr->is_free)
@@ -571,31 +578,31 @@ void execute_command(char *input) {
           used_mem += curr->size;
         blocks++;
         if (curr->size == 0 && curr->next != NULL) {
-          shell_print("Error: Zero-size block detected.\n", COLOR_RED);
+          shell_print_current("Error: Zero-size block detected.\n", COLOR_RED);
           break;
         }
         curr = curr->next;
       }
 
       char buf[32];
-      shell_print("Total Blocks: ", COLOR_WHITE);
+      shell_print_current("Total Blocks: ", COLOR_WHITE);
       itoa(blocks, buf, 10);
-      shell_print(buf, COLOR_YELLOW);
-      shell_print("\n", COLOR_WHITE);
+      shell_print_current(buf, COLOR_YELLOW);
+      shell_print_current("\n", COLOR_WHITE);
 
-      shell_print("Used Memory:  ", COLOR_WHITE);
+      shell_print_current("Used Memory:  ", COLOR_WHITE);
       itoa(used_mem / 1024, buf, 10);
-      shell_print(buf, COLOR_YELLOW);
-      shell_print(" KB\n", COLOR_WHITE);
+      shell_print_current(buf, COLOR_YELLOW);
+      shell_print_current(" KB\n", COLOR_WHITE);
 
-      shell_print("Free Memory:  ", COLOR_WHITE);
+      shell_print_current("Free Memory:  ", COLOR_WHITE);
       itoa(free_mem / 1024, buf, 10);
-      shell_print(buf, COLOR_GREEN);
-      shell_print(" KB\n", COLOR_WHITE);
+      shell_print_current(buf, COLOR_GREEN);
+      shell_print_current(" KB\n", COLOR_WHITE);
 
       if (free_mem < 4194304) {
-        shell_print("WARNING: Low Heap Memory! Close windows or REBOOT.\n",
-                    COLOR_RED);
+        shell_print_current(
+            "WARNING: Low Heap Memory! Close windows or REBOOT.\n", COLOR_RED);
       }
     }
 
@@ -610,8 +617,8 @@ void execute_command(char *input) {
 
   } else if (kstrcasecmp(input, "ECHO") == 0) {
     if (arg) {
-      shell_print(arg, COLOR_WHITE);
-      shell_print("\n", COLOR_WHITE);
+      shell_print_current(arg, COLOR_WHITE);
+      shell_print_current("\n", COLOR_WHITE);
     }
 
   } else if (kstrcasecmp(input, "SLEEP") == 0) {
@@ -625,27 +632,28 @@ void execute_command(char *input) {
       fn[15] = '\0';
       int tid = spawn_task(KED_task, fn, "KED");
       task_create_window(tid, 0, 0, 0, 0);
-      shell_print("Text Editor Spawned.\n", COLOR_GREEN);
+      keyboard_focus_tid = tid;
+      shell_print_current("Text Editor Spawned.\n", COLOR_GREEN);
     } else {
-      shell_print("Usage: KED <filename>\n", COLOR_RED);
+      shell_print_current("Usage: KED <filename>\n", COLOR_RED);
     }
 
   } else if (kstrcasecmp(input, "TOP") == 0) {
     extern void run_top();
     int tid = spawn_task(run_top, NULL, "TOP");
     task_create_window(tid, 0, 0, 0, 0);
-    shell_print("TOP Spawned.\n", COLOR_GREEN);
+    shell_print_current("TOP Spawned.\n", COLOR_GREEN);
 
   } else if (kstrcmp(input, "GAME") == 0) {
     extern void task_game();
     int tid = spawn_task(task_game, NULL, "GAME");
     task_create_window(tid, 0, 0, 0, 0);
-    shell_print("Game Spawned.\n", COLOR_GREEN);
+    shell_print_current("Game Spawned.\n", COLOR_GREEN);
 
   } else if (kstrcmp(input, "TIMER") == 0) {
     extern void task_timer();
     spawn_task(task_timer, NULL, "TIMER");
-    shell_print("Background Timer Spawned.\n", COLOR_GREEN);
+    shell_print_current("Background Timer Spawned.\n", COLOR_GREEN);
 
   } else if (kstrcasecmp(input, "RUN") == 0) {
     cmd_run(arg);
@@ -654,59 +662,70 @@ void execute_command(char *input) {
     if (arg)
       shell_compile(arg);
     else
-      shell_print("Usage: COMPILE <file.txt>\n", COLOR_RED);
+      shell_print_current("Usage: COMPILE <file.txt>\n", COLOR_RED);
 
   } else if (kstrcasecmp(input, "KILL") == 0) {
     if (arg) {
       int id = katoi(arg);
       if (id == 0)
-        shell_print("Cannot kill Shell.\n", COLOR_RED);
+        shell_print_current("Cannot kill Shell.\n", COLOR_RED);
       else {
         kill_task(id);
-        shell_print("Task killed.\n", COLOR_GREEN);
+        shell_print_current("Task killed.\n", COLOR_GREEN);
       }
     }
 
   } else if (input[0] != '\0') {
-    shell_print("Unknown command: ", COLOR_RED);
-    shell_print(input, COLOR_RED);
-    shell_print("\n", COLOR_RED);
+    shell_print_current("Unknown command: ", COLOR_RED);
+    shell_print_current(input, COLOR_RED);
+    shell_print_current("\n", COLOR_RED);
   }
 
   mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
 }
 
+void shell_print_current(char *str, uint32_t color) {
+  int tid = get_current_task_id();
+  struct task *t = &task_list[tid];
+  shell_print(t, str, color);
+}
+
 // Always target TID 0 (The Kernel/Shell task) for terminal output
 #define SHELL_TID 0
 
-void shell_print(char *str, uint32_t color) {
-  if (shell_tid < 0)
+void shell_print(struct task *t, char *str, uint32_t color) {
+  if (!t || !t->window_buffer)
     return;
-  volatile struct task *t = &task_list[shell_tid];
-  int padding_x = 2;
+
+  int padding_x = WIN_BORDER + 2;
 
   for (int i = 0; str[i] != '\0'; i++) {
+
     if (str[i] == '\n') {
       t->cursor_x = padding_x;
       t->cursor_y += 10;
+
       if (t->cursor_y + 10 >= t->win_h)
-        shell_scroll();
+        shell_scroll(t);
+
       continue;
     }
 
     shell_draw_char(str[i], t->cursor_x, t->cursor_y, color, 0x222222);
+
     t->cursor_x += 8;
 
     if (t->cursor_x >= t->win_w - 8) {
       t->cursor_x = padding_x;
       t->cursor_y += 10;
+
       if (t->cursor_y + 10 >= t->win_h)
-        shell_scroll();
+        shell_scroll(t);
     }
   }
-  mark_task_dirty(shell_tid, 0, 0, t->win_w, t->win_h);
-}
 
+  mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
+}
 void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
   if (shell_tid < 0)
     return;
@@ -733,20 +752,18 @@ void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
   }
 }
 
-void shell_scroll() {
-  if (shell_tid < 0)
+void shell_scroll(struct task *t) {
+  if (!t || !t->window_buffer)
     return;
-  volatile struct task *t = &task_list[shell_tid];
+
   struct multiboot_info *mbi = VESA_get_boot_info();
   uint32_t sw = mbi->framebuffer_width;
   int scroll_y = 10;
 
-  if (!t->has_window || !t->window_buffer)
-    return;
-
   for (int y = 0; y < t->win_h - scroll_y; y++) {
     uint32_t *dst = &t->window_buffer[y * sw];
     uint32_t *src = &t->window_buffer[(y + scroll_y) * sw];
+
     __asm__ volatile("rep movsl"
                      : "+D"(dst), "+S"(src), "+c"(t->win_w)
                      :
@@ -756,6 +773,7 @@ void shell_scroll() {
   for (int y = t->win_h - scroll_y; y < t->win_h; y++) {
     uint32_t *dst = &t->window_buffer[y * sw];
     uint32_t val = 0x222222;
+
     __asm__ volatile("rep stosl"
                      : "+D"(dst), "+c"(t->win_w)
                      : "a"(val)
@@ -763,5 +781,6 @@ void shell_scroll() {
   }
 
   t->cursor_y -= scroll_y;
-  mark_task_dirty(shell_tid, 0, 0, t->win_w, t->win_h);
+
+  mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
 }

@@ -151,18 +151,14 @@ void kill_task(int id) {
 extern volatile int shell_tid;
 void shell_task() {
   shell_tid = current_task_idx;
-  while (!task_list[current_task_idx].has_window ||
-         !task_list[current_task_idx].window_ready) {
-    yield();
-  }
   load_history();
   char line[128];
   int idx = 0;
 
   task_list[current_task_idx].cursor_x = WIN_BORDER + 2;
   task_list[current_task_idx].cursor_y = WIN_BORDER + 2;
-
-  shell_print("> ", 0xFFFF00);
+  volatile struct task *t = &task_list[current_task_idx];
+  shell_print(t, "> ", 0xFFFF00);
   mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
 
   while (1) {
@@ -207,7 +203,7 @@ void shell_task() {
               : history_view_idx;
       kstrcpy(line, shell_history[actual_idx]);
       idx = kstrlen(line);
-      shell_print(line, 0xFFFFFF);
+      shell_print(t, line, 0xFFFFFF);
       mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
     } else if (c == 12) {
       if (history_view_idx != -1) {
@@ -231,13 +227,13 @@ void shell_task() {
                   : history_view_idx;
           kstrcpy(line, shell_history[actual_idx]);
           idx = kstrlen(line);
-          shell_print(line, 0xFFFFFF);
+          shell_print(t, line, 0xFFFFFF);
         }
         mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
       }
     } else if (c == '\n') {
       line[idx] = '\0';
-      shell_print("\n", 0xFFFFFF);
+      shell_print(t, "\n", 0xFFFFFF);
       if (idx > 0) {
         kstrcpy(shell_history[history_write_idx], line);
         history_write_idx = (history_write_idx + 1) % MAX_HISTORY;
@@ -249,7 +245,7 @@ void shell_task() {
       }
       idx = 0;
       history_view_idx = -1;
-      shell_print("> ", 0xFFFF00);
+      shell_print(t, "> ", 0xFFFF00);
       mark_task_dirty(current_task_idx, 0, 0, 4000, 4000);
     } else if (c == '\b' && idx > 0) {
       idx--;
@@ -261,7 +257,7 @@ void shell_task() {
       char str[2] = {c, '\0'};
       int sx = t->cursor_x;
       int sy = t->cursor_y;
-      shell_print(str, 0xFFFFFF);
+      shell_print(t, str, 0xFFFFFF);
       mark_task_dirty(current_task_idx, sx, sy, 8, 8);
     } else if (idx < 127 && c >= ' ') {
       line[idx++] = c;
@@ -269,7 +265,7 @@ void shell_task() {
 
       int start_x = t->cursor_x;
       int start_y = t->cursor_y;
-      shell_print(str, 0xFFFFFF);
+      shell_print(t, str, 0xFFFFFF);
 
       mark_task_dirty(current_task_idx, start_x, start_y, 8, 8);
     }
@@ -675,4 +671,96 @@ void task_set_arguments(int tid, char *arg_string) {
   }
   argv_buf[i] = '\0';
   *argc_ptr = count;
+}
+
+int get_current_tid() { return current_task_idx; }
+
+void kconsole_putc(struct task *t, char c, uint32_t fg) {
+  if (!t || !t->window_buffer)
+    return;
+
+  int padding_x = 2;
+
+  if (c == '\n') {
+    t->cursor_x = padding_x;
+    t->cursor_y += 10;
+
+    if (t->cursor_y + 10 >= t->win_h)
+      kconsole_scroll(t);
+
+    return;
+  }
+
+  draw_char(t, c, t->cursor_x, t->cursor_y, fg, 0x222222);
+
+  t->cursor_x += 8;
+
+  if (t->cursor_x >= t->win_w - 8) {
+    t->cursor_x = padding_x;
+    t->cursor_y += 10;
+
+    if (t->cursor_y + 10 >= t->win_h)
+      kconsole_scroll(t);
+  }
+}
+
+void kconsole_write(struct task *t, const char *s, uint32_t fg) {
+  for (int i = 0; s[i]; i++) {
+    kconsole_putc(t, s[i], fg);
+  }
+  int tid = t - task_list;
+  mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
+}
+void kconsole_scroll(struct task *t) {
+  if (!t || !t->window_buffer)
+    return;
+
+  struct multiboot_info *mbi = VESA_get_boot_info();
+  uint32_t sw = mbi->framebuffer_width;
+  int scroll_y = 10;
+
+  for (int y = 0; y < t->win_h - scroll_y; y++) {
+    uint32_t *dst = &t->window_buffer[y * sw];
+    uint32_t *src = &t->window_buffer[(y + scroll_y) * sw];
+
+    __asm__ volatile("rep movsl"
+                     : "+D"(dst), "+S"(src), "+c"(t->win_w)
+                     :
+                     : "memory");
+  }
+
+  for (int y = t->win_h - scroll_y; y < t->win_h; y++) {
+    uint32_t *dst = &t->window_buffer[y * sw];
+    uint32_t val = 0x222222;
+
+    __asm__ volatile("rep stosl"
+                     : "+D"(dst), "+c"(t->win_w)
+                     : "a"(val)
+                     : "memory");
+  }
+
+  t->cursor_y -= scroll_y;
+
+  mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
+}
+void draw_char(struct task *t, char c, int x, int y, uint32_t fg, uint32_t bg) {
+  struct multiboot_info *mbi = VESA_get_boot_info();
+  uint32_t sw = mbi->framebuffer_width;
+
+  extern uint8_t font8x8_basic[128][8];
+  uint8_t *glyph = font8x8_basic[(unsigned char)c];
+
+  for (int row = 0; row < 8; row++) {
+    for (int col = 0; col < 8; col++) {
+      int dx = x + col;
+      int dy = y + row;
+
+      if (dx >= 0 && dx < t->win_w && dy >= 0 && dy < t->win_h) {
+        t->window_buffer[dy * sw + dx] =
+            (glyph[row] & (1 << (7 - col))) ? fg : bg;
+      }
+    }
+  }
+  int tid = t - task_list;
+  mark_task_dirty(tid, x, y, 8, 8);
 }
