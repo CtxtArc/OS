@@ -94,6 +94,7 @@ int get_current_tid();
 void kconsole_putc(struct task *t, char c, uint32_t fg);
 void kconsole_write(struct task *t, const char *s, uint32_t fg);
 void kconsole_scroll(struct task *t);
+void kconsole_clear(struct task *t, uint32_t bg_color);
 
 void draw_char(struct task *t, char c, int x, int y, uint32_t fg, uint32_t bg);
 #endif

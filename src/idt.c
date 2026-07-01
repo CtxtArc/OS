@@ -192,9 +192,22 @@ void isr_handler(struct registers *r) {
 
 uint32_t timer_handler(struct registers *regs) {
   system_ticks++;
-  outb(0x20, 0x20); // ACK the interrupt to the PIC early
+  outb(0x20, 0x20); // ACK early
 
-  // Let the central scheduler decide what happens next
+  if (multitasking_enabled) {
+    // Countdown sleep ticks strictly based on the hardware timer!
+    for (int i = 0; i < MAX_TASKS; i++) {
+      if (task_list[i].state == 2) {
+        if (task_list[i].sleep_ticks > 0) {
+          task_list[i].sleep_ticks--;
+        }
+        if (task_list[i].sleep_ticks == 0) {
+          task_list[i].state = 1; // Wake up!
+        }
+      }
+    }
+  }
+
   return schedule_next((uint32_t)regs);
 }
 int is_extended = 0;
@@ -418,21 +431,27 @@ uint32_t syscall_handler(struct registers *regs) {
 
     regs->eip = (uint32_t)idle_task_code;
     return schedule_next((uint32_t)regs);
+
   } else if (regs->eax == 5) { // CLEAR WINDOW
     if (task_list[id].has_window && task_list[id].window_buffer) {
-      uint32_t *buf = task_list[id].window_buffer;
-      uint32_t count = sw * task_list[id].win_h;
-      uint32_t color = 0x222222; // Your standard background color
+      uint32_t color = 0x222222; // Shell background
 
-      // Use 'rep stosl' for a professional, high-speed memory fill
-      __asm__ volatile("rep stosl"
-                       : "+D"(buf), "+c"(count)
-                       : "a"(color)
-                       : "memory");
+      // Line-by-line fill
+      for (int y = 0; y < task_list[id].win_h; y++) {
+        uint32_t *dst = &task_list[id].window_buffer[y * sw];
+        uint32_t count = task_list[id].win_w;
+        __asm__ volatile("rep stosl"
+                         : "+D"(dst), "+c"(count)
+                         : "a"(color)
+                         : "memory");
+      }
 
-      // Mark the entire window as dirty so the WM redraws it
+      // Reset shell cursor (uses WIN_BORDER padding)
+      task_list[id].cursor_x = border + 2;
+      task_list[id].cursor_y = border + 2;
       mark_task_dirty(id, 0, 0, task_list[id].win_w, task_list[id].win_h);
     }
+    return (uint32_t)regs;
   } else if (regs->eax == 6) { // DRAW_RECT
     int rx = regs->ebx + border;
     int ry = regs->ecx + border;

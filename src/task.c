@@ -41,17 +41,6 @@ uint32_t schedule_next(uint32_t current_esp) {
     task_list[current_task_idx].esp = current_esp;
   }
 
-  // 2. Wake up sleeping tasks
-  for (int i = 0; i < MAX_TASKS; i++) {
-    if (task_list[i].state == 2) {
-      if (task_list[i].sleep_ticks > 0) {
-        task_list[i].sleep_ticks--;
-      } else {
-        task_list[i].state = 1; // Wake up!
-      }
-    }
-  }
-
   // 3. Find the next READY (state == 1) task
   int next_idx = current_task_idx;
   do {
@@ -307,20 +296,6 @@ int task_get_total_ticks(int id) {
   return (id >= 0 && id < MAX_TASKS) ? (int)task_list[id].total_ticks : -1;
 }
 
-void task_timer() {
-  uint32_t seconds = 0;
-  while (1) {
-    seconds++;
-    char buf[20];
-
-    kmemset(buf, 0, 20 / 4);
-    kstrcpy(buf, "TIMER: ");
-    itoa(seconds, buf + 7, 10);
-    VESA_print_at(buf, 900, 10, 0x00FFFF);
-    sleep(1000);
-  }
-}
-
 void task_game() {
   int previous_focus = keyboard_focus_tid;
   keyboard_focus_tid = current_task_idx;
@@ -387,57 +362,128 @@ void task_game() {
   task_list[current_task_idx].cursor_x = 0;
   task_list[current_task_idx].cursor_y = 0;
 }
-
 void run_top() {
-  int previous_focus = keyboard_focus_tid;
-  keyboard_focus_tid = current_task_idx;
+  // 1. Request a GUI Window via Syscall 8
+  __asm__ volatile("int $0x80" : : "a"(8) : "memory");
 
-  while (has_key_in_buffer())
-    get_key_from_buffer();
-  VESA_clear();
+  int tid = get_current_task_id();
+  volatile struct task *t = &task_list[tid];
+
+  // 2. Wait for the Compositor to assign a window size
+  while (t->win_w < 10) {
+    yield();
+  }
 
   while (1) {
-    vesa_updating = 1;
-    VESA_clear_buffer_only();
+    if (t->state == 0)
+      break;
+    if (!t->has_window || !t->window_ready) {
+      yield();
+      continue;
+    }
 
-    kprintf_unsync("KDXOS TOP - System Ticks: %d\n", system_ticks);
-    kprintf_unsync("Press 'q' to return to Shell\n");
-    kprintf_unsync("-------------------------------------------\n");
-    kprintf_unsync("TID   NAME         STATE      CPU-TICKS\n");
-
-    for (int i = 0; i < MAX_TASKS; i++) {
-      if (task_get_state(i) != 0) {
-        kprintf_unsync("%d     %s", i, task_get_name(i));
-        int name_len = kstrlen(task_get_name(i));
-        for (int j = 0; j < (13 - name_len); j++)
-          kprintf_unsync(" ");
-        if (task_get_state(i) == 1)
-          kprintf_unsync("READY      ");
-        else if (task_get_state(i) == 2)
-          kprintf_unsync("SLEEP      ");
-        kprintf_unsync("%d\n", task_get_total_ticks(i));
+    // --- INPUT HANDLING ---
+    if (t->kbd_head != t->kbd_tail) {
+      char c = t->kbd_buffer[t->kbd_tail];
+      t->kbd_tail = (t->kbd_tail + 1) % 64;
+      if (c == 'q' || c == 'Q') {
+        break;
       }
     }
 
-    vesa_updating = 0;
-    vesa_dirty = 1;
-    VESA_flip();
+    // --- RENDERING TO PRIVATE BUFFER ---
+    kconsole_clear((struct task *)t, 0x222222);
 
-    if (has_key_in_buffer()) {
-      char c = get_key_from_buffer();
-      if (c == 'q' || c == 'Q')
-        break;
+    t->cursor_x = 10;
+    t->cursor_y = 10;
+
+    char num_buf[16];
+
+    kconsole_write((struct task *)t, "KDXOS TOP - System Ticks: ", 0xFFFFFF);
+    itoa(system_ticks, num_buf, 10);
+    kconsole_write((struct task *)t, num_buf, 0x00FFFF);
+    kconsole_write((struct task *)t, "\nPress 'Q' to exit\n", 0xAAAAAA);
+    kconsole_write((struct task *)t,
+                   "-------------------------------------------\n", 0x555555);
+    kconsole_write((struct task *)t,
+                   "TID   NAME         STATE      CPU-TICKS\n", 0xFFFF00);
+
+    for (int i = 0; i < MAX_TASKS; i++) {
+      if (task_get_state(i) != 0) {
+        // TID
+        itoa(i, num_buf, 10);
+        kconsole_write((struct task *)t, num_buf, 0xFFFFFF);
+        kconsole_write((struct task *)t, "     ", 0xFFFFFF);
+
+        // Name
+        kconsole_write((struct task *)t, task_get_name(i), 0xFFFFFF);
+        int name_len = kstrlen(task_get_name(i));
+        for (int j = 0; j < (13 - name_len); j++) {
+          kconsole_write((struct task *)t, " ", 0xFFFFFF);
+        }
+
+        // State
+        if (task_get_state(i) == 1)
+          kconsole_write((struct task *)t, "READY      ", 0x00FF00);
+        else if (task_get_state(i) == 2)
+          kconsole_write((struct task *)t, "SLEEP      ", 0xAAAAAA);
+
+        // Ticks
+        itoa(task_get_total_ticks(i), num_buf, 10);
+        kconsole_write((struct task *)t, num_buf, 0x00FFFF);
+        kconsole_write((struct task *)t, "\n", 0xFFFFFF);
+      }
     }
+
+    // Tell the Compositor we are ready
+    mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
+
     sleep(500);
   }
 
-  VESA_clear_buffer_only();
-  keyboard_focus_tid = previous_focus;
-  kprintf_unsync("Returned to Shell.\n");
-  vesa_dirty = 1;
-  VESA_flip();
+  // --- CLEANUP ---
+  __asm__ volatile("mov $4, %eax; int $0x80"); // Task Exit Syscall
+  while (1)
+    yield();
 }
 
+void task_timer() {
+  // 1. Request a GUI Window via Syscall 8
+  __asm__ volatile("mov $8, %eax; int $0x80");
+
+  int tid = get_current_task_id();
+  volatile struct task *t = &task_list[tid];
+
+  // 2. Wait for the Compositor to assign a window size
+  while (t->win_w < 10) {
+    yield();
+  }
+
+  uint32_t seconds = 0;
+  while (1) {
+    if (t->state == 0)
+      break; // Exit if killed
+
+    seconds++;
+    char buf[20];
+    kmemset(buf, 0, 20 / 4);
+    kstrcpy(buf, "TIMER: ");
+    itoa(seconds, buf + 7, 10);
+
+    // 3. Clear ONLY our private window buffer
+    kconsole_clear((struct task *)t, 0x111111);
+
+    // 4. Draw to the private buffer using your console function
+    t->cursor_x = 10;
+    t->cursor_y = 10;
+    kconsole_write((struct task *)t, buf, 0x00FFFF);
+
+    // 5. Tell the Compositor we are ready to be drawn to the real screen
+    mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
+
+    sleep(1000);
+  }
+}
 void run_startup_tests() {
   uint32_t color_info = 0x00FFFF;
   uint32_t color_title = 0xFFFF00;
@@ -533,7 +579,18 @@ void run_startup_tests() {
   }
   get_key_from_buffer();
 }
-
+void greedy_test_task() {
+  uint32_t counter = 0;
+  while (1) {
+    counter++;
+    if (counter % 10000000 == 0) {
+      // Print directly to screen to see it working
+      VESA_print_at("GREEDY TASK IS ALIVE!", 10, 700, 0xFF00FF);
+    }
+    // Notice there is NO sleep() or yield() here.
+    // It's trying to consume 100% of the CPU.
+  }
+}
 void init_multitasking() {
   multitasking_enabled = 0;
 
@@ -563,6 +620,8 @@ void init_multitasking() {
   int t1 = spawn_task(idle_task_code, NULL, "idle");
   int t2 = spawn_task(compositor_task, NULL, "wm");
   int t3 = spawn_task(klog_daemon, NULL, "log_daemon");
+  // int t4 = spawn_task(greedy_test_task, NULL, "greedy task");
+  int t4 = spawn_task(task_timer, NULL, "timer");
 
   if (t1 < 0 || t2 < 0 || t3 < 0) {
     VESA_print_at("FATAL ERROR: KHEAP OOM. TASKS FAILED TO SPAWN!", 10, 10,
@@ -716,6 +775,34 @@ void kconsole_write(struct task *t, const char *s, uint32_t fg) {
   int tid = t - task_list;
   mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
 }
+
+void kconsole_clear(struct task *t, uint32_t bg_color) {
+  if (!t || !t->window_buffer)
+    return;
+
+  struct multiboot_info *mbi = VESA_get_boot_info();
+  uint32_t sw = mbi->framebuffer_width;
+
+  for (int y = 0; y < t->win_h; y++) {
+    uint32_t *dst = &t->window_buffer[y * sw];
+
+    // FIX: Copy to a local variable so 'rep stosl' doesn't destroy the window
+    // width!
+    uint32_t count = t->win_w;
+
+    __asm__ volatile("rep stosl"
+                     : "+D"(dst), "+c"(count)
+                     : "a"(bg_color)
+                     : "memory");
+  }
+
+  t->cursor_x = 10;
+  t->cursor_y = 10;
+
+  int tid = t - task_list;
+  mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
+}
+
 void kconsole_scroll(struct task *t) {
   if (!t || !t->window_buffer)
     return;
@@ -728,18 +815,24 @@ void kconsole_scroll(struct task *t) {
     uint32_t *dst = &t->window_buffer[y * sw];
     uint32_t *src = &t->window_buffer[(y + scroll_y) * sw];
 
+    // FIX: Local variable
+    uint32_t count = t->win_w;
+
     __asm__ volatile("rep movsl"
-                     : "+D"(dst), "+S"(src), "+c"(t->win_w)
+                     : "+D"(dst), "+S"(src), "+c"(count)
                      :
                      : "memory");
   }
 
   for (int y = t->win_h - scroll_y; y < t->win_h; y++) {
     uint32_t *dst = &t->window_buffer[y * sw];
+
+    // FIX: Local variable
+    uint32_t count = t->win_w;
     uint32_t val = 0x222222;
 
     __asm__ volatile("rep stosl"
-                     : "+D"(dst), "+c"(t->win_w)
+                     : "+D"(dst), "+c"(count)
                      : "a"(val)
                      : "memory");
   }
@@ -748,6 +841,7 @@ void kconsole_scroll(struct task *t) {
 
   mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
 }
+
 void draw_char(struct task *t, char c, int x, int y, uint32_t fg, uint32_t bg) {
   struct multiboot_info *mbi = VESA_get_boot_info();
   uint32_t sw = mbi->framebuffer_width;
