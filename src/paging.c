@@ -30,6 +30,20 @@ void flush_tlb() {
   __asm__ volatile("mov %0, %%cr3" : : "r"(reg));
 }
 
+void make_user_accessible(uint32_t virt, uint32_t size) {
+  extern uint32_t kernel_page_tables[32][1024];
+  for (uint32_t i = 0; i < size; i += 4096) {
+    uint32_t dir_index = (virt + i) >> 22;
+    uint32_t table_index = ((virt + i) >> 12) & 0x03FF;
+
+    // Bit 2 (Value 4) is the User/Supervisor bit.
+    // OR'ing it with 4 unlocks it for Ring 3.
+    kernel_page_tables[dir_index][table_index] |= 4;
+  }
+  extern void flush_tlb();
+  flush_tlb();
+}
+
 void paging_init(struct multiboot_info *mbi) {
   // 1. Clear Page Directory
   for (int i = 0; i < 1024; i++) {

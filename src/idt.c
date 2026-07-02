@@ -406,32 +406,16 @@ uint32_t syscall_handler(struct registers *regs) {
   } else if (regs->eax == 4) { // EXIT
     int id = current_task_idx;
 
-    // Stop blitting this task
-    task_list[id].window_ready = 0;
-    task_list[id].has_window = 0;
-    task_list[id].state = 0; // DEAD
+    // Use your existing robust cleanup function to prevent memory leaks!
+    extern void kill_task(int id);
+    kill_task(id);
 
-    if (task_list[id].window_buffer) {
-      kfree(task_list[id].window_buffer);
-      task_list[id].window_buffer = NULL;
-    }
-
-    refresh_tiling_layout();
-
-    // If this was the focused task, pass focus to someone else
     if (keyboard_focus_tid == id) {
-      keyboard_focus_tid = 0; // Default to kernel/shell
-    }
-
-    // Force everyone else to redraw their borders/contents over the gap
-    for (int i = 0; i < MAX_TASKS; i++) {
-      if (task_list[i].state != 0)
-        mark_task_dirty(i, 0, 0, 4000, 4000);
+      keyboard_focus_tid = 0;
     }
 
     regs->eip = (uint32_t)idle_task_code;
     return schedule_next((uint32_t)regs);
-
   } else if (regs->eax == 5) { // CLEAR WINDOW
     if (task_list[id].has_window && task_list[id].window_buffer) {
       uint32_t color = 0x222222; // Shell background
@@ -647,6 +631,9 @@ uint32_t syscall_handler(struct registers *regs) {
     // Read the injected value and return it in EAX
     uint32_t *argc_ptr = (uint32_t *)(aligned_code + 2800);
     regs->eax = *argc_ptr;
+
+    regs->eax = *argc_ptr;
+    return (uint32_t)regs; // EXPLICIT RETURN HERE
   }
   return (uint32_t)regs;
 }

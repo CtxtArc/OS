@@ -1,7 +1,9 @@
 #include "shell.h"
 #include "assembler.h"
+#include "header.h"
 #include "kheap.h"
 #include "lib.h"
+#include "paging.h"
 #include "pmm.h"
 #include "task.h"
 #include "vesa.h"
@@ -289,8 +291,11 @@ void dummy_app() {
 }
 
 // ---------------------------------------------------------------------------
-// RUN — load a binary's bytes through VFS, then hand off to the scheduler
+// RUN — Load a binary, parse header, map memory for Ring 3, and spawn!
 // ---------------------------------------------------------------------------
+extern int spawn_user_task(void (*entry_point)(), void *code_ptr, char *name);
+extern void make_user_accessible(uint32_t virt, uint32_t size);
+
 static void cmd_run(char *arg) {
   if (!arg) {
     shell_print_current("Usage: RUN <file> [args]\n", COLOR_WHITE);
@@ -322,7 +327,7 @@ static void cmd_run(char *arg) {
   }
 
   uint32_t size = node->size;
-  void *raw_code = kmalloc(size + 8192); // extra space for variables/args
+  void *raw_code = kmalloc(size + 8192); // Extra space for variables/args
   if (!raw_code) {
     shell_print_current("RUN: out of memory.\n", COLOR_RED);
     kfree(node);
@@ -333,21 +338,40 @@ static void cmd_run(char *arg) {
   vfs_read(node, 0, size, (uint8_t *)aligned_code);
   kfree(node);
 
-  // code_ptr MUST be the raw kmalloc pointer for task_set_arguments to work
-  int tid = spawn_task((void (*)())aligned_code, raw_code, filename);
+  // --- HEADER PARSING ---
+  kdx_header_t *hdr = (kdx_header_t *)aligned_code;
+  if (hdr->magic != 0x4B445821) {
+    shell_print_current("RUN: Invalid executable format (Missing Magic!).\n",
+                        COLOR_RED);
+    kfree(raw_code);
+    return;
+  }
+
+  // --- RING 3 MEMORY UNLOCK ---
+  // The CPU will deny execution in Ring 3 unless we flag these pages as User
+  // Accessible
+  make_user_accessible(aligned_code, size + 8192);
+
+  // Calculate the true entry point based on the header offset
+  uint32_t entry_addr = aligned_code + hdr->entry_point;
+
+  // SPAWN AS RING 3 USER TASK
+  int tid = spawn_user_task((void (*)())entry_addr, raw_code, filename);
 
   if (tid >= 0) {
     if (app_args && *app_args != '\0') {
       task_set_arguments(tid, app_args);
     }
-    task_create_window(tid, 0, 0, 0, 0);
+    if (hdr->flags & 1) { // Only create a window if the GUI flag is set
+      task_create_window(tid, 0, 0, 0, 0);
+    }
   } else {
     kfree(raw_code);
   }
 }
 
 // ---------------------------------------------------------------------------
-// COMPILE — source read through VFS, binary written through VFS
+// COMPILE — Generates the KDX Binary Header before writing opcodes
 // ---------------------------------------------------------------------------
 void shell_compile(const char *arg) {
   vfs_node_t *file = vfs_walk_path(arg, NULL);
@@ -365,14 +389,25 @@ void shell_compile(const char *arg) {
 
   uint8_t *binary_buf = (uint8_t *)kmalloc(8192);
 
+  // --- WRITE BINARY HEADER ---
+  kdx_header_t *hdr = (kdx_header_t *)binary_buf;
+  hdr->magic = 0x4B445821; // "KDX!"
+  hdr->version = 1;
+  hdr->entry_point =
+      sizeof(kdx_header_t); // Opcodes start immediately after header
+  hdr->heap_size = 8192;
+  hdr->flags = 1; // Defaulting to GUI enabled
+
   label_count = 0;
   rt_var_count = 0;
-
   uint32_t binary_size = 0;
 
+  // Assembly passes
   for (int pass = 1; pass <= 2; pass++) {
     uint32_t current_pos = 0;
-    uint32_t binary_pos = 0;
+
+    // Opcodes must be written AFTER the header
+    uint32_t binary_pos = sizeof(kdx_header_t);
 
     while (current_pos < kstrlen(source_buf)) {
       char temp_line[128];
@@ -413,7 +448,7 @@ void shell_compile(const char *arg) {
   out_name[k++] = 'N';
   out_name[k] = '\0';
 
-  // Write the compiled binary through VFS
+  // Write through VFS
   vfs_node_t *out_node = vfs_finddir(fs_current_dir, out_name);
   if (!out_node) {
     vfs_create(fs_current_dir, out_name, FS_FILE);
@@ -431,7 +466,6 @@ void shell_compile(const char *arg) {
   kfree(source_buf);
   kfree(binary_buf);
 }
-
 // ---------------------------------------------------------------------------
 // execute_command — dispatcher. Filesystem branches call cmd_* only.
 // ---------------------------------------------------------------------------
