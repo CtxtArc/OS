@@ -51,6 +51,12 @@ uint32_t schedule_next(uint32_t current_esp) {
   current_task_idx = next_idx;
   task_list[current_task_idx].total_ticks++;
 
+  // Tell the CPU where this task's base kernel stack is
+  // (We add 16384 because the stack grows downward, so we give it the TOP of
+  // the allocated memory)
+  extern void set_kernel_stack(uint32_t stack);
+  set_kernel_stack((uint32_t)task_list[current_task_idx].stack_ptr + 16384);
+
   // 5. Return the new task's stack pointer
   return task_list[current_task_idx].esp;
 }
@@ -99,6 +105,64 @@ int spawn_task(void (*entry_point)(), void *code_ptr, char *name) {
       for (int j = 0; j < 8; j++)
         *--s_ptr = 0;
       *--s_ptr = 0x10;
+
+      task_list[i].esp = (uint32_t)s_ptr;
+      task_list[i].state = 1;
+      return i;
+    }
+  }
+  return ERR_TASK_TABLE_FULL;
+}
+
+int spawn_user_task(void (*entry_point)(), void *code_ptr, char *name) {
+  if (!entry_point)
+    return ERR_TASK_INVALID_EP;
+
+  for (int i = 1; i < MAX_TASKS; i++) {
+    if (task_list[i].state == 0) {
+      kstrncpy((char *)task_list[i].name, name, 15);
+      task_list[i].name[15] = '\0';
+
+      task_list[i].has_window = 0;
+      task_list[i].window_ready = 0;
+      task_list[i].window_buffer = NULL;
+      task_list[i].total_ticks = 0;
+      task_list[i].sleep_ticks = 0;
+      task_list[i].is_dirty = 0;
+      task_list[i].kbd_head = 0;
+      task_list[i].kbd_tail = 0;
+
+      uint32_t stack_size = 16384;
+      void *raw_stack = kmalloc(stack_size + 0x1000);
+      if (!raw_stack)
+        return ERR_TASK_STACK_OOM;
+
+      task_list[i].stack_ptr = raw_stack;
+      task_list[i].code_ptr = code_ptr;
+
+      uint32_t aligned_stack = (uint32_t)raw_stack;
+      if (aligned_stack & 0xFFF) {
+        aligned_stack &= 0xFFFFF000;
+        aligned_stack += 0x1000;
+      }
+
+      uint32_t *s_ptr = (uint32_t *)(aligned_stack + stack_size);
+
+      // --- THE RING 3 MAGIC (IRET FRAME) ---
+      // The CPU requires 5 values on the stack for a privilege change
+      *--s_ptr = 0x23; // SS (User Data Segment)
+      *--s_ptr = (uint32_t)(aligned_stack + stack_size - 16); // User ESP
+      *--s_ptr = 0x202;                 // EFLAGS (Interrupts enabled)
+      *--s_ptr = 0x1B;                  // CS (User Code Segment)
+      *--s_ptr = (uint32_t)entry_point; // EIP (Function to run)
+
+      // --- PUSHA & HANDLER FRAME ---
+      *--s_ptr = 0;  // Error Code (Dummy)
+      *--s_ptr = 32; // Interrupt Number (Dummy)
+      for (int j = 0; j < 8; j++)
+        *--s_ptr = 0; // pusha registers
+
+      *--s_ptr = 0x23; // DS (User Data Segment loaded by assembly stub)
 
       task_list[i].esp = (uint32_t)s_ptr;
       task_list[i].state = 1;
@@ -273,6 +337,14 @@ void yield() {
 void idle_task_code() {
   while (1)
     __asm__ volatile("hlt");
+}
+
+void user_test_task() {
+  while (1) {
+    // We are in Ring 3! We can't use yield() because it calls int $32.
+    // We MUST use Syscall 3 (Sleep) to give up the CPU.
+    __asm__ volatile("int $0x80" : : "a"(3), "b"(1000) : "memory");
+  }
 }
 
 int get_current_task_id() { return current_task_idx; }
@@ -622,6 +694,7 @@ void init_multitasking() {
   int t3 = spawn_task(klog_daemon, NULL, "log_daemon");
   // int t4 = spawn_task(greedy_test_task, NULL, "greedy task");
   int t4 = spawn_task(task_timer, NULL, "timer");
+  int t5 = spawn_user_task(user_test_task, NULL, "user_app");
 
   if (t1 < 0 || t2 < 0 || t3 < 0) {
     VESA_print_at("FATAL ERROR: KHEAP OOM. TASKS FAILED TO SPAWN!", 10, 10,

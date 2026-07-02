@@ -76,7 +76,7 @@ void idt_init() {
     idt_set_gate(i, 0, 0, 0);
 
   // System calls
-  idt_set_gate(128, (uint32_t)isr128_stub, 0x08, 0x8E);
+  idt_set_gate(128, (uint32_t)isr128_stub, 0x08, 0xEE);
 
   // Hardware IRQs
   extern void irq0_handler();

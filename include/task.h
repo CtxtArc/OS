@@ -62,6 +62,7 @@ void idle_task_code();
 void yield();
 int get_current_task_id();
 int spawn_task(void (*entry_point)(), void *code_ptr, char *name);
+int spawn_user_task(void (*entry_point)(), void *code_ptr, char *name);
 void kill_task(int id);
 uint32_t task_get_esp(int id);
 int task_is_ready(int id);
@@ -79,6 +80,7 @@ void task_create_window(int tid, int x, int y, int w, int h);
 extern volatile struct task task_list[MAX_TASKS];
 extern int vesa_dirty; // Useful for the shell to trigger refreshes
 
+void user_test_task();
 void klog_daemon();
 void run_startup_tests();
 void compositor_task();

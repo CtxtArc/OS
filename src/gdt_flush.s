@@ -12,3 +12,11 @@ gdt_flush:
     jmp 0x08:.flush     ; 0x08 is our Code Segment (entry 1). Far jump!
 .flush:
     ret
+
+global tss_flush
+tss_flush:
+    mov ax, 0x2B ; 0x28 is the 5th entry in GDT, OR'd with RPL 3 (0x28 | 3 = 0x2B)
+    ltr ax
+    ret
+
+
